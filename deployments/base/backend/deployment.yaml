@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voicera-backend
+  namespace: voicera-backend
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  selector:
+    matchLabels:
+      app: voicera-backend
+  template:
+    metadata:
+      labels:
+        app: voicera-backend
+    spec:
+      nodeSelector:
+        app: voicera
+      containers:
+        - name: voicera-backend
+          image: registryharbor.bhashini.co.in/bhashini/voicera/voicera-backend-prod:1.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          resources:
+            limits:
+              cpu: "1"
+              memory: "4Gi"
+            requests:
+              cpu: "200m"
+              memory: "1Gi"
+          envFrom:
+            - secretRef:
+                name: voicera-backend-secret

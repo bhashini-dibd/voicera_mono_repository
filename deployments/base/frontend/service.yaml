@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicera-frontend
+  namespace: voicera-frontend
+spec:
+  selector:
+    app: voicera-frontend
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000

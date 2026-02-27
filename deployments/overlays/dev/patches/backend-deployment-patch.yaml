@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voicera-backend
+  namespace: voicera-backend
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: voicera-backend
+          image: registryharbor.bhashini.co.in/bhashini/voicera/voicera-backend-prod:dev-1.0.1

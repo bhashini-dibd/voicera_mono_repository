@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voicera-frontend
+  namespace: voicera-frontend
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: voicera-frontend
+          image: registryharbor.bhashini.co.in/bhashini/voicera/voicera-frontend-prod:dev-1.0.1

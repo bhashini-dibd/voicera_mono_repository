@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: voicera-backend
+  namespace: voicera-backend
+spec:
+  selector:
+    app: voicera-backend
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
