@@ -316,6 +316,7 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
         # Wait for start event with call metadata (Vobiz may send "connected" first)
         first_message = await websocket.receive_text()
         data = json.loads(first_message)
+        logger.info(f"📨 First WebSocket message: {first_message}")
         first_event = data.get("event", "<no event key>")
         logger.info(f"📨 First WebSocket message: event={first_event}, keys={list(data.keys())}")
 
