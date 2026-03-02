@@ -22,7 +22,7 @@ spec:
         app: voicera
       containers:
         - name: voicera-backend
-          image: registryharbor.bhashini.co.in/bhashini/voicera/voicera-backend-prod:1.0.1
+          image: registryharbor.bhashini.co.in/bhashini/voicera/voicera-backend-prod
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
