@@ -91,10 +91,10 @@ pipeline {
 
     post {
         success {
-            echo "Production deployment successful 🚀"
+            echo "Production deployment successful"
         }
         failure {
-            echo "Production deployment failed ❌"
+            echo "Production deployment failed "
         }
         always {
             cleanWs()
