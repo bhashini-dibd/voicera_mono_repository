@@ -90,8 +90,8 @@ pipeline {
     }
 
     post {
-        success { echo "Server PROD deployment successful 🚀" }
-        failure { echo "Server PROD deployment failed ❌" }
+        success { echo "Server PROD deployment successful " }
+        failure { echo "Server PROD deployment failed " }
         always { cleanWs() }
     }
 }
