@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Any, Optional
 
 import aiohttp
@@ -58,6 +59,49 @@ class SarvamLLM(OpenAILLMService):
             return "".join(parts)
         return ""
 
+    @staticmethod
+    def _post_process_text(raw_text: str) -> str:
+        """
+        Return only user-facing final answer text.
+        Removes reasoning blocks and picks the best final candidate when model truncates.
+        """
+        if not raw_text:
+            return ""
+
+        text = raw_text.strip()
+
+        # Prefer text after a completed </think> block if present.
+        if "</think>" in text:
+            text = text.split("</think>")[-1].strip()
+        else:
+            # If we only have <think> content (possibly truncated), try quoted final answers.
+            quoted = re.findall(r'"([^"\n]{2,220})"', text)
+            if quoted:
+                # Pick the last non-empty, sentence-like candidate.
+                for candidate in reversed(quoted):
+                    c = candidate.strip()
+                    if c and "<" not in c and ">" not in c:
+                        return c
+
+            # Fallback: keep only content after "<think>" marker if present.
+            if "<think>" in text:
+                text = text.split("<think>")[-1]
+
+        # Remove any remaining think tags and normalize whitespace.
+        text = re.sub(r"</?think>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"[ \t]+", " ", text)
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if not lines:
+            return ""
+
+        # Prefer the last concise sentence-like line.
+        for line in reversed(lines):
+            cleaned = re.sub(r"^[\-\*\d\.\)\s:]+", "", line).strip()
+            if cleaned and len(cleaned) <= 240:
+                return cleaned
+
+        return lines[-1]
+
     async def _process_context(self, context: OpenAILLMContext | LLMContext):
         messages = context.get_messages()
         if not messages:
@@ -84,7 +128,7 @@ class SarvamLLM(OpenAILLMService):
                 raise Exception(f"Sarvam LLM API error {response.status}")
 
             response_json = await response.json(content_type=None)
-            text = self._extract_text(response_json)
+            text = self._post_process_text(self._extract_text(response_json))
 
             if not text:
                 logger.warning("SarvamLLM returned empty response text")
@@ -95,4 +139,3 @@ class SarvamLLM(OpenAILLMService):
     async def cleanup(self):
         if self._session and not self._session.closed:
             await self._session.close()
-
