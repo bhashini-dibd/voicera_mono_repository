@@ -1,10 +1,9 @@
 import asyncio
 import base64
-import json
 import os
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Optional
 
-import aiohttp
+from loguru import logger
 from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
@@ -14,101 +13,141 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.tts_service import TTSService
 
-from loguru import logger
+try:
+    import socketio
+except ModuleNotFoundError as e:
+    logger.error(f"Exception: {e}")
+    logger.error("Install with: pip install python-socketio[asyncio_client] aiohttp")
+    raise Exception(f"Missing module: {e}")
+
 
 class BhashiniTTSService(TTSService):
+    """Bhashini real-time TTS over Socket.IO websocket."""
 
     def __init__(
         self,
         *,
         speaker: str = "Divya",
         description: str = "A clear, natural voice with good audio quality.",
-        sample_rate: int = 44100,
-        play_steps_in_s: float = 0.5,
+        sample_rate: int = 24000,
+        api_key: Optional[str] = None,
+        socket_url: Optional[str] = None,
+        socket_path: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
 
-        server_url = os.getenv("BHASHINI_TTS_SERVER_URL")
-        if not server_url:
-            raise ValueError("BHASHINI_TTS_SERVER_URL environment variable not set")
+        self._api_key = (api_key or os.getenv("BHASHINI_API_KEY", "")).strip()
+        if not self._api_key:
+            raise ValueError("BHASHINI_API_KEY environment variable not set")
 
-        self._server_url = f"{server_url.rstrip('/')}/tts/stream"
-        self._auth_token = os.getenv("BHASHINI_TTS_AUTH_TOKEN")
-        if not self._auth_token:
-            raise ValueError("BHASHINI_TTS_AUTH_TOKEN environment variable not set")
+        self._socket_url = (
+            socket_url
+            or os.getenv("BHASHINI_TTS_SERVER_URL")
+            or os.getenv("BHASHINI_SOCKET_URL")
+            or "wss://dhruva-api.bhashini.gov.in"
+        ).strip()
+        self._socket_path = (socket_path or os.getenv("BHASHINI_TTS_SOCKET_PATH", "/socket_tts.io")).strip()
+
         self._speaker = speaker
         self._description = description
-        self._play_steps_in_s = play_steps_in_s
-        self._play_steps_in_s = play_steps_in_s
+        self._request_timeout = int(os.getenv("BHASHINI_TTS_TIMEOUT_SECONDS", "90"))
 
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         if not text.strip():
             return
 
-        timeout = aiohttp.ClientTimeout(total=120)
+        queue: asyncio.Queue = asyncio.Queue()
+        stream_finished = asyncio.Event()
+        stream_sample_rate = self.sample_rate
+        sio = socketio.AsyncClient(reconnection=False)
+
+        @sio.event
+        async def connect():
+            logger.debug(f"Bhashini TTS connected: {self._socket_url}")
+            await sio.emit("start")
+
+        @sio.event
+        async def connect_error(data):
+            await queue.put(("error", f"Connection error: {data}"))
+            stream_finished.set()
+
+        @sio.on("ready")
+        async def on_ready():
+            payload = {
+                "text": text,
+                "description": self._description,
+                "speaker": self._speaker,
+            }
+            await sio.emit("data", payload)
+
+        @sio.on("response")
+        async def on_response(data):
+            nonlocal stream_sample_rate
+            stream_sample_rate = int(data.get("sampleRate", stream_sample_rate))
+            audio_b64 = data.get("audioContent")
+            if audio_b64:
+                try:
+                    audio_bytes = base64.b64decode(audio_b64)
+                    await queue.put(("audio", audio_bytes))
+                except Exception as e:
+                    await queue.put(("error", f"Audio decode error: {e}"))
+                    stream_finished.set()
+                    return
+
+            if data.get("isFinal", False):
+                stream_finished.set()
+
+        @sio.on("abort")
+        async def on_abort(data):
+            await queue.put(("error", f"Server aborted stream: {data}"))
+            stream_finished.set()
+
+        @sio.on("terminate")
+        async def on_terminate():
+            stream_finished.set()
+
+        @sio.event
+        async def disconnect():
+            logger.debug("Bhashini TTS disconnected")
+            stream_finished.set()
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                payload = {
-                    "text": text,
-                    "description": self._description,
-                    "speaker": self._speaker,
-                    "play_steps_in_s": self._play_steps_in_s,
-                }
+            yield TTSStartedFrame()
 
-                yield TTSStartedFrame()
+            await sio.connect(
+                f"{self._socket_url}?output_sample_rate={self.sample_rate}",
+                transports=["websocket"],
+                socketio_path=self._socket_path,
+                headers={"Authorization": self._api_key},
+            )
 
-                async with session.post(
-                    self._server_url,
-                    json=payload,
-                    headers={
-                        "Accept": "application/x-ndjson",
-                        "Authorization": f"Bearer {self._auth_token}",
-                    },
-                ) as response:
-                    if response.status != 200:
-                        yield ErrorFrame(f"Server error: {response.status}")
-                        return
+            while True:
+                if stream_finished.is_set() and queue.empty():
+                    break
+                try:
+                    kind, payload = await asyncio.wait_for(queue.get(), timeout=0.5)
+                    if kind == "audio":
+                        yield TTSAudioRawFrame(
+                            audio=payload,
+                            sample_rate=stream_sample_rate,
+                            num_channels=1,
+                        )
+                    elif kind == "error":
+                        yield ErrorFrame(str(payload))
+                        break
+                except asyncio.TimeoutError:
+                    continue
 
-                    buffer = ""
-                    async for chunk in response.content.iter_any():
-                        if not chunk:
-                            continue
+            yield TTSStoppedFrame()
 
-                        buffer += chunk.decode("utf-8")
-                        
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            if not line.strip():
-                                continue
-
-                            try:
-                                data = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-
-                            if "error" in data:
-                                yield ErrorFrame(data["error"])
-                                return
-
-                            if data.get("done"):
-                                break
-
-                            if "audio" in data:
-                                audio_bytes = base64.b64decode(data["audio"])
-                                logger.info(f"Audio chunk sent to Telephony: {len(audio_bytes)} bytes")
-                                yield TTSAudioRawFrame(
-                                    audio=audio_bytes,
-                                    sample_rate=data.get("sample_rate", self.sample_rate),
-                                    num_channels=1,
-                                )
-
-                yield TTSStoppedFrame()
-
-        except aiohttp.ClientError as e:
-            yield ErrorFrame(f"Connection error: {e}")
         except asyncio.TimeoutError:
-            yield ErrorFrame("Request timeout")
+            yield ErrorFrame("Bhashini TTS request timeout")
         except Exception as e:
-            yield ErrorFrame(f"TTS error: {e}")
+            yield ErrorFrame(f"Bhashini TTS error: {e}")
+        finally:
+            try:
+                if sio.connected:
+                    await sio.disconnect()
+            except Exception as e:
+                logger.warning(f"Bhashini TTS disconnect error: {e}")
