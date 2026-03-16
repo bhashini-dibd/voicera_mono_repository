@@ -22,7 +22,6 @@ class BhashiniTTSService(TTSService):
 
     DEFAULT_GRPC_TARGET = "grpc.nvcf.nvidia.com:443"
     DEFAULT_FUNCTION_ID = "a92982cc-6608-461f-8d10-dacefdd98516"
-    DEFAULT_AUTH_TOKEN = "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"
 
     def __init__(
         self,
@@ -43,11 +42,11 @@ class BhashiniTTSService(TTSService):
         ).strip()
         auth_token = (
             api_key
-            or os.getenv("BHASHINI_API_KEY")
+            or os.getenv("BHASHINI_NVCF_TTS_AUTH_TOKEN")
+            or os.getenv("BHASHINI_NVCF_TTS__AUTH_TOKEN")
             or os.getenv("BHASHINI_TTS_AUTH_TOKEN")
             or os.getenv("NVCF_API_KEY")
             or os.getenv("NVIDIA_API_KEY")
-            or self.DEFAULT_AUTH_TOKEN
         )
         function_id = (
             os.getenv("BHASHINI_TTS_FUNCTION_ID")
@@ -58,6 +57,12 @@ class BhashiniTTSService(TTSService):
             os.getenv("BHASHINI_TTS_FUNCTION_VERSION_ID")
             or os.getenv("INDIC_TTS_FUNCTION_VERSION_ID")
         )
+
+        if not auth_token:
+            raise ValueError(
+                "Bhashini TTS auth token not set. Configure BHASHINI_NVCF_TTS_AUTH_TOKEN, "
+                "BHASHINI_NVCF_TTS__AUTH_TOKEN, BHASHINI_TTS_AUTH_TOKEN, NVCF_API_KEY, or NVIDIA_API_KEY."
+            )
 
         self._grpc_target = grpc_target
         self._auth_token = auth_token
