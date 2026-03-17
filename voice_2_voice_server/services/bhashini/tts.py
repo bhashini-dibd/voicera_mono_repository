@@ -28,7 +28,7 @@ class BhashiniTTSService(TTSService):
         *,
         speaker: str = "Divya",
         description: str = "A clear, natural voice with good audio quality.",
-        sample_rate: int = 24000,
+        sample_rate: int = 44100,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
@@ -58,7 +58,7 @@ class BhashiniTTSService(TTSService):
         self._speaker = speaker
         self._description = description
         self._request_timeout = float(os.getenv("BHASHINI_TTS_TIMEOUT_SECONDS", "120"))
-        self._play_steps_in_s = float(os.getenv("BHASHINI_TTS_PLAY_STEPS_IN_S", "0.15"))
+        self._play_steps_in_s = float(os.getenv("BHASHINI_TTS_PLAY_STEPS_IN_S", "0.5"))
 
         self._channel: Optional[grpc.aio.Channel] = None
         self._stub: Optional[tts_pb2_grpc.TTSServiceStub] = None
