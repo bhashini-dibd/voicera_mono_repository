@@ -20,6 +20,7 @@ from pipecat.processors.aggregators.llm_response import LLMUserAggregatorParams
 
 # Local services
 from services.kenpath_llm.llm import KenpathLLM
+from services.sarvam_llm.llm import SarvamLLM
 from services.ai4bharat.tts import IndicParlerRESTTTSService
 from services.ai4bharat.stt import IndicConformerRESTSTTService
 from services.bhashini.stt import BhashiniSTTService
@@ -55,7 +56,13 @@ def create_llm_service(
     provider = llm_config.get("name") or llm_config.get("provider")
     args = llm_config.get("args", {})
     model = args.get("model") or llm_config.get("model")
-
+    provider_map = {
+        "openai": "OpenAI",
+        "kenpath": "Kenpath",
+        "sarvam": "Sarvam",
+    }
+    provider = provider_map.get((provider or "").lower(), provider)
+    
     if provider == "OpenAI":
         # Extract user aggregator params from config, with defaults
         user_aggregator_params = LLMUserAggregatorParams(
@@ -70,6 +77,17 @@ def create_llm_service(
         # Store user aggregator params on the service instance for later use
         service._user_aggregator_params = user_aggregator_params
 
+        return service
+    elif provider == "Sarvam":
+        user_aggregator_params = LLMUserAggregatorParams(
+            aggregation_timeout=args.get("aggregation_timeout", 0.05)
+        )
+
+        service = SarvamLLM(
+            model=get_llm_model(provider, model),
+        )
+
+        service._user_aggregator_params = user_aggregator_params
         return service
     elif provider == "Kenpath":
         return KenpathLLM(
@@ -248,7 +266,7 @@ def create_tts_service(tts_config: dict, sample_rate: int) -> Any:
         return BhashiniTTSService(
             speaker=speaker,
             description=description,
-            sample_rate=44100
+            sample_rate=sample_rate
         )
     
     elif provider == "Sarvam":

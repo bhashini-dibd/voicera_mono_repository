@@ -1,10 +1,10 @@
 import asyncio
-import base64
-import json
 import os
-from typing import AsyncGenerator
+import time
+from typing import AsyncGenerator, Optional
 
-import aiohttp
+import grpc
+from loguru import logger
 from pipecat.frames.frames import (
     ErrorFrame,
     Frame,
@@ -14,9 +14,14 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.tts_service import TTSService
 
-from loguru import logger
+from . import tts_pb2, tts_pb2_grpc
+
 
 class BhashiniTTSService(TTSService):
+    """Bhashini TTS backed by the NVCF gRPC streaming endpoint."""
+
+    DEFAULT_GRPC_TARGET = "grpc.nvcf.nvidia.com:443"
+    DEFAULT_FUNCTION_ID = "a92982cc-6608-461f-8d10-dacefdd98516"
 
     def __init__(
         self,
@@ -24,145 +29,170 @@ class BhashiniTTSService(TTSService):
         speaker: str = "Divya",
         description: str = "A clear, natural voice with good audio quality.",
         sample_rate: int = 44100,
-        play_steps_in_s: float = 0.5,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
 
-        server_url = os.getenv("BHASHINI_TTS_SERVER_URL")
-        if not server_url:
-            raise ValueError("BHASHINI_TTS_SERVER_URL environment variable not set")
+        grpc_target = (
+            os.getenv("BHASHINI_TTS_GRPC_TARGET")
+            or self.DEFAULT_GRPC_TARGET
+        ).strip()
+        auth_token = (
+            os.getenv("BHASHINI_NVCF_TTS_AUTH_TOKEN")
+        )
+        function_id = (
+            os.getenv("BHASHINI_TTS_FUNCTION_ID")
+            or self.DEFAULT_FUNCTION_ID
+        )
+        function_version_id = os.getenv("BHASHINI_TTS_FUNCTION_VERSION_ID")
 
-        self._server_url = f"{server_url.rstrip('/')}/tts/stream"
-        self._auth_token = os.getenv("BHASHINI_TTS_AUTH_TOKEN")
-        if not self._auth_token:
-            raise ValueError("BHASHINI_TTS_AUTH_TOKEN environment variable not set")
+        if not auth_token:
+            raise ValueError(
+                "Bhashini TTS auth token not set. Configure BHASHINI_NVCF_TTS_AUTH_TOKEN."
+            )
+
+        self._grpc_target = grpc_target
+        self._auth_token = auth_token
+        self._function_id = function_id
+        self._function_version_id = function_version_id
         self._speaker = speaker
         self._description = description
-        self._play_steps_in_s = play_steps_in_s
-        self._play_steps_in_s = play_steps_in_s
+        self._request_timeout = float(os.getenv("BHASHINI_TTS_TIMEOUT_SECONDS", "120"))
+        self._play_steps_in_s = float(os.getenv("BHASHINI_TTS_PLAY_STEPS_IN_S", "0.5"))
+
+        self._channel: Optional[grpc.aio.Channel] = None
+        self._stub: Optional[tts_pb2_grpc.TTSServiceStub] = None
+
+    async def start(self, frame: Frame):
+        logger.info(
+            "Starting Bhashini gRPC TTS service | target={} | function_id={} | version_id={} | sample_rate={}",
+            self._grpc_target,
+            self._function_id,
+            self._function_version_id or "default",
+            self.sample_rate,
+        )
+        self._channel = grpc.aio.secure_channel(
+            self._grpc_target,
+            grpc.ssl_channel_credentials(),
+        )
+        self._stub = tts_pb2_grpc.TTSServiceStub(self._channel)
+        await super().start(frame)
+
+    async def stop(self, frame: Frame):
+        logger.info("Stopping Bhashini gRPC TTS service")
+        if self._channel is not None:
+            await self._channel.close()
+            self._channel = None
+            self._stub = None
+        await super().stop(frame)
+
+    def _build_metadata(self) -> list[tuple[str, str]]:
+        metadata = [
+            ("authorization", f"Bearer {self._auth_token}"),
+            ("function-id", self._function_id),
+        ]
+        if self._function_version_id:
+            metadata.append(("function-version-id", self._function_version_id))
+        return metadata
+
+    def _masked_token(self) -> str:
+        if not self._auth_token:
+            return "missing"
+        if len(self._auth_token) <= 10:
+            return "***"
+        return f"{self._auth_token[:8]}...{self._auth_token[-4:]}"
 
     async def run_tts(self, text: str) -> AsyncGenerator[Frame, None]:
         if not text.strip():
             logger.debug("🔊 Bhashini TTS: run_tts skipped - empty text")
             return
 
-        timeout = aiohttp.ClientTimeout(total=120)
-        payload = {
-            "text": text,
-            "description": self._description,
-            "speaker": self._speaker,
-            "play_steps_in_s": self._play_steps_in_s,
-        }
-        logger.info(
-            "🔊 Bhashini TTS: calling API url=%s text_len=%d text_preview=%s speaker=%s",
-            self._server_url,
-            len(text),
-            text[:80].replace("\n", " "),
-            self._speaker,
+        if self._stub is None:
+            logger.warning("Bhashini gRPC stub not initialized, creating temporary channel")
+            temp_channel = grpc.aio.secure_channel(
+                self._grpc_target,
+                grpc.ssl_channel_credentials(),
+            )
+            stub = tts_pb2_grpc.TTSServiceStub(temp_channel)
+            should_close = True
+        else:
+            temp_channel = None
+            stub = self._stub
+            should_close = False
+
+        request = tts_pb2.TTSRequest(
+            text=text,
+            speaker=self._speaker,
+            description=self._description,
+            play_steps_in_s=self._play_steps_in_s,
         )
 
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                yield TTSStartedFrame()
+            started_at = time.perf_counter()
+            logger.info(
+                "Bhashini gRPC TTS request started | chars={} | speaker={} | target={} | function_id={} | token={}",
+                len(text),
+                self._speaker,
+                self._grpc_target,
+                self._function_id,
+                self._masked_token(),
+            )
+            yield TTSStartedFrame()
 
-                async with session.post(
-                    self._server_url,
-                    json=payload,
-                    headers={
-                        "Accept": "application/x-ndjson",
-                        "Authorization": f"Bearer {self._auth_token}",
-                    },
-                ) as response:
-                    status = response.status
+            chunk_count = 0
+            total_bytes = 0
+            first_chunk_ms = None
+            async for chunk in stub.StreamTTS(
+                request,
+                metadata=self._build_metadata(),
+                timeout=self._request_timeout,
+            ):
+                if not chunk.audio:
+                    logger.debug("Bhashini gRPC returned empty audio chunk")
+                    continue
+
+                if first_chunk_ms is None:
+                    first_chunk_ms = (time.perf_counter() - started_at) * 1000
                     logger.info(
-                        "🔊 Bhashini TTS: response status=%s reason=%s content_type=%s",
-                        status,
-                        getattr(response, "reason", ""),
-                        response.headers.get("Content-Type", ""),
+                        "Bhashini gRPC first audio chunk received in {:.1f} ms | sample_rate={}",
+                        first_chunk_ms,
+                        chunk.sample_rate or self.sample_rate,
                     )
-                    if status != 200:
-                        body = ""
-                        try:
-                            body = (await response.read()).decode("utf-8", errors="replace")[:500]
-                        except Exception:
-                            pass
-                        logger.error(
-                            "🔊 Bhashini TTS: API error status=%s body=%s",
-                            status,
-                            body,
-                        )
-                        yield ErrorFrame(f"Server error: {status}")
-                        return
 
-                    buffer = ""
-                    chunk_count = 0
-                    total_audio_bytes = 0
-                    stream_done = False
-                    async for chunk in response.content.iter_any():
-                        if stream_done:
-                            break
-                        if not chunk:
-                            continue
+                yield TTSAudioRawFrame(
+                    audio=chunk.audio,
+                    sample_rate=chunk.sample_rate or self.sample_rate,
+                    num_channels=1,
+                )
+                chunk_count += 1
+                total_bytes += len(chunk.audio)
 
-                        buffer += chunk.decode("utf-8")
+                if chunk_count <= 3 or chunk_count % 25 == 0:
+                    logger.debug(
+                        "Bhashini gRPC audio chunk {} | bytes={} | sample_rate={}",
+                        chunk_count,
+                        len(chunk.audio),
+                        chunk.sample_rate or self.sample_rate,
+                    )
 
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            if not line.strip():
-                                continue
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.info(
+                "Bhashini gRPC TTS completed | chunks={} | bytes={} | ttft_ms={} | total_ms={:.1f}",
+                chunk_count,
+                total_bytes,
+                f"{first_chunk_ms:.1f}" if first_chunk_ms is not None else "n/a",
+                elapsed_ms,
+            )
+            yield TTSStoppedFrame()
 
-                            try:
-                                data = json.loads(line)
-                            except json.JSONDecodeError:
-                                continue
-
-                            if "error" in data:
-                                logger.error("🔊 Bhashini TTS: API returned error in payload: %s", data.get("error"))
-                                yield ErrorFrame(data["error"])
-                                return
-
-                            if data.get("done"):
-                                logger.info(
-                                    "🔊 Bhashini TTS: stream done chunk_count=%d total_audio_bytes=%d",
-                                    chunk_count,
-                                    total_audio_bytes,
-                                )
-                                stream_done = True
-                                break
-
-                            if "audio" in data:
-                                audio_bytes = base64.b64decode(data["audio"])
-                                total_audio_bytes += len(audio_bytes)
-                                chunk_count += 1
-                                if chunk_count <= 3 or chunk_count % 20 == 0:
-                                    logger.info(
-                                        "🔊 Bhashini TTS: audio chunk %d len=%d total_so_far=%d",
-                                        chunk_count,
-                                        len(audio_bytes),
-                                        total_audio_bytes,
-                                    )
-                                yield TTSAudioRawFrame(
-                                    audio=audio_bytes,
-                                    sample_rate=data.get("sample_rate", self.sample_rate),
-                                    num_channels=1,
-                                )
-
-                    if chunk_count > 0 and not stream_done:
-                        logger.info(
-                            "🔊 Bhashini TTS: completed chunk_count=%d total_audio_bytes=%d",
-                            chunk_count,
-                            total_audio_bytes,
-                        )
-
-                yield TTSStoppedFrame()
-
-        except aiohttp.ClientError as e:
-            logger.error("🔊 Bhashini TTS: ClientError: %s", e)
-            yield ErrorFrame(f"Connection error: {e}")
+        except grpc.aio.AioRpcError as e:
+            logger.error(f"Bhashini gRPC error: {e.code()} {e.details()}")
+            yield ErrorFrame(f"gRPC TTS error: {e.details() or e.code().name}")
         except asyncio.TimeoutError:
-            logger.error("🔊 Bhashini TTS: Request timeout")
-            yield ErrorFrame("Request timeout")
+            yield ErrorFrame("Bhashini TTS request timeout")
         except Exception as e:
-            logger.error("🔊 Bhashini TTS: error: %s", e)
-            yield ErrorFrame(f"TTS error: {e}")
+            logger.error(f"Bhashini TTS error: {e}")
+            yield ErrorFrame(f"Bhashini TTS error: {e}")
+        finally:
+            if should_close and temp_channel is not None:
+                await temp_channel.close()

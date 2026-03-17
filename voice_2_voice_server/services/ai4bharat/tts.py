@@ -15,6 +15,7 @@ from pipecat.frames.frames import (
 )
 from pipecat.services.tts_service import TTSService
 
+
 class IndicParlerRESTTTSService(TTSService):
 
     def __init__(
@@ -37,12 +38,9 @@ class IndicParlerRESTTTSService(TTSService):
         self._description = description
         self._play_steps_in_s = play_steps_in_s
         self._session = None
-        
+
     async def start(self, frame: Frame):
         logger.info("Starting IndicParler TTS service")
-        # Optimization: Use TCPConnector with keepalive to ensure connection reuse
-        # limit=0 means no limit on concurrent connections
-        # ttl_dns_cache=300 caches DNS lookups for 5 minutes
         connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300)
         timeout = aiohttp.ClientTimeout(total=120, connect=10)
         self._session = aiohttp.ClientSession(connector=connector, timeout=timeout)
@@ -59,7 +57,6 @@ class IndicParlerRESTTTSService(TTSService):
         if not text.strip():
             return
 
-        # Use persistent session if available, otherwise fall back to temporary (safety)
         session = self._session
         should_close = False
         if not session or session.closed:
@@ -93,7 +90,7 @@ class IndicParlerRESTTTSService(TTSService):
                         continue
 
                     buffer += chunk.decode("utf-8")
-                    
+
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
                         if not line.strip():
