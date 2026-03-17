@@ -36,32 +36,21 @@ class BhashiniTTSService(TTSService):
 
         grpc_target = (
             os.getenv("BHASHINI_TTS_GRPC_TARGET")
-            or os.getenv("BHASHINI_TTS_SERVER_URL")
-            or os.getenv("BHASHINI_SOCKET_URL")
             or self.DEFAULT_GRPC_TARGET
         ).strip()
         auth_token = (
             api_key
             or os.getenv("BHASHINI_NVCF_TTS_AUTH_TOKEN")
-            or os.getenv("BHASHINI_NVCF_TTS__AUTH_TOKEN")
-            or os.getenv("BHASHINI_TTS_AUTH_TOKEN")
-            or os.getenv("NVCF_API_KEY")
-            or os.getenv("NVIDIA_API_KEY")
         )
         function_id = (
             os.getenv("BHASHINI_TTS_FUNCTION_ID")
-            or os.getenv("INDIC_TTS_FUNCTION_ID")
             or self.DEFAULT_FUNCTION_ID
         )
-        function_version_id = (
-            os.getenv("BHASHINI_TTS_FUNCTION_VERSION_ID")
-            or os.getenv("INDIC_TTS_FUNCTION_VERSION_ID")
-        )
+        function_version_id = os.getenv("BHASHINI_TTS_FUNCTION_VERSION_ID")
 
         if not auth_token:
             raise ValueError(
-                "Bhashini TTS auth token not set. Configure BHASHINI_NVCF_TTS_AUTH_TOKEN, "
-                "BHASHINI_NVCF_TTS__AUTH_TOKEN, BHASHINI_TTS_AUTH_TOKEN, NVCF_API_KEY, or NVIDIA_API_KEY."
+                "Bhashini TTS auth token not set. Configure BHASHINI_NVCF_TTS_AUTH_TOKEN."
             )
 
         self._grpc_target = grpc_target
