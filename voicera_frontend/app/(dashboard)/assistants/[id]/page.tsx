@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useMemo, useRef } from "react"
 import { useRouter, useParams } from "next/navigation"
-import Link from "next/link"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,13 +15,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
+  ChevronLeft,
   ChevronRight,
   ChevronDown,
   Phone,
-  Code,
+  FileText,
   Save,
   Loader2,
-  Globe,
   Volume2,
   Mic,
   Settings,
@@ -186,6 +185,13 @@ const llmProviders = {
   },
 }
 
+const editWizardSteps = [
+  { id: 1, title: "Agent", subtitle: "Name & Prompt", icon: FileText },
+  { id: 2, title: "LLM", subtitle: "Model Config", icon: Settings },
+  { id: 3, title: "Audio", subtitle: "STT & TTS", icon: Volume2 },
+  { id: 4, title: "Telephony", subtitle: "Select Provider", icon: Phone },
+]
+
 export default function AgentDetailPage() {
   const router = useRouter()
   const params = useParams()
@@ -206,7 +212,6 @@ export default function AgentDetailPage() {
   const [isKnowledgeLoading, setIsKnowledgeLoading] = useState(false)
 
   // Form state
-  const [agentName, setAgentName] = useState("")
   const [systemPrompt, setSystemPrompt] = useState("")
   const [greetingMessage, setGreetingMessage] = useState("")
   const [language, setLanguage] = useState("")
@@ -224,9 +229,9 @@ export default function AgentDetailPage() {
   const [speed, setSpeed] = useState(1.0)
 
   // Collapsible states
-  const [voiceSettingsOpen, setVoiceSettingsOpen] = useState(true)
   const [llmSettingsOpen, setLlmSettingsOpen] = useState(true)
   const [languageOpen, setLanguageOpen] = useState(false)
+  const [editStep, setEditStep] = useState(1)
 
   // Track if we're in the initial data loading phase to prevent validation from clearing values
   const isInitialLoadRef = useRef(true)
@@ -386,7 +391,6 @@ export default function AgentDetailPage() {
     isInitialLoadRef.current = true
     setIsLoading(true)
     setAgent(null)
-    setAgentName("")
     setSystemPrompt("")
     setGreetingMessage("")
     setLanguage("")
@@ -442,33 +446,6 @@ export default function AgentDetailPage() {
           console.log("Full agent data received:", JSON.stringify(agentData, null, 2))
           setAgent(agentData)
 
-          // Extract agent name from agentId first (most reliable since it's in the URL)
-          // The agentId format is: "org_id-agent_type-timestamp" where agent_type may contain spaces/hyphens
-          let name = ""
-          if (agentId) {
-            // Decode the agentId in case it's URL encoded
-            const decodedId = decodeURIComponent(agentId)
-            const parts = decodedId.split('-')
-            // The last part is always the timestamp (numeric), everything between first and last is agent_type
-            if (parts.length >= 3) {
-              // Join all parts except the first (org_id) and last (timestamp) to get the agent_type
-              name = parts.slice(1, -1).join('-')
-            } else if (parts.length === 2) {
-              // Fallback: if only 2 parts, the second might be the agent_type
-              name = parts[1]
-            }
-          }
-
-          // Fallback to agent_type from backend if extraction from agentId failed
-          if (!name || name === "voicera_telephony") {
-            name = agentData.agent_type || ""
-          }
-
-          // Capitalize first letter for display
-          const finalName = name
-            ? name.charAt(0).toUpperCase() + name.slice(1)
-            : "Unnamed Agent"
-          setAgentName(finalName)
           setSystemPrompt(agentData.agent_config?.system_prompt || "")
           setGreetingMessage(agentData.agent_config?.greeting_message || "")
 
@@ -771,23 +748,19 @@ export default function AgentDetailPage() {
     }
   }
 
-  const formatDate = (dateString: string) => {
-    const utcDate = dateString.endsWith("Z")
-      ? dateString
-      : `${dateString}Z`
-
-    const date = new Date(utcDate)
-
-    return date.toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-      timeZone: "Asia/Kolkata",
-    })
+  const handleBackToList = () => {
+    router.push("/assistants")
   }
+
+  const handleNextStep = () => {
+    setEditStep((prev) => Math.min(prev + 1, editWizardSteps.length))
+  }
+
+  const handlePreviousStep = () => {
+    setEditStep((prev) => Math.max(prev - 1, 1))
+  }
+
+  const progressPercent = (editStep / editWizardSteps.length) * 100
 
 
   if (isLoading) {
@@ -806,70 +779,91 @@ export default function AgentDetailPage() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-50/50">
-      {/* Header */}
-      <header className="flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-5 lg:px-8 sticky top-0 z-10">
-        <nav className="flex items-center gap-1.5 text-sm">
-          <Link href="/assistants" className="text-slate-500 hover:text-slate-900">
-            Dashboard
-          </Link>
-          <ChevronRight className="h-4 w-4 text-slate-400" />
-          <Link href="/assistants" className="text-slate-500 hover:text-slate-900">
-            Assistants
-          </Link>
-          <ChevronRight className="h-4 w-4 text-slate-400" />
-          <span className="text-slate-900 font-medium">{agentName || agentId.slice(0, 8)}</span>
-        </nav>
-
+      {/* Header with Progress */}
+      <header className="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-6 sticky top-0 z-10">
+        <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleBackToList}
+            className="h-8 px-3 text-slate-600 hover:bg-slate-100 gap-1.5"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Back
+          </Button>
+          <Separator orientation="vertical" className="h-5" />
+          <h1 className="text-sm font-semibold text-slate-900">Configure Telephony Agent</h1>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-500">Progress</span>
+          <div className="w-32 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-slate-900 rounded-full transition-all duration-300"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+          <span className="text-xs font-medium text-slate-700">{Math.round(progressPercent)}%</span>
+        </div>
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-auto p-6 lg:p-8">
-        {/* Agent Header */}
-        <div className="mb-6">
-          <div className="flex items-start justify-between mb-2">
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold text-slate-900">
-                {agentName ? agentName : (agentId ? agentId.slice(0, 8) : "Unnamed Agent")}
-              </h1>
-            </div>
-            {hasChanges && (
-              <Button
-                onClick={handleSaveClick}
-                disabled={isSaving}
-                className="h-11 px-6 bg-slate-900 hover:bg-slate-800 text-white"
-              >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4 mr-2" />
-                    Save Changes
-                  </>
-                )}
-              </Button>
-            )}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top Row - Progress Stepper */}
+        <aside className="bg-white border-b border-slate-100 p-3 sm:p-4">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 text-center">Setup Progress</h3>
+          <div className="flex gap-2 overflow-x-auto pb-1 justify-center">
+            {editWizardSteps.map((step) => {
+              const Icon = step.icon
+              const isActive = editStep === step.id
+              const isCompleted = editStep > step.id
+
+              return (
+                <button
+                  key={step.id}
+                  onClick={() => setEditStep(step.id)}
+                  className={`shrink-0 min-w-[140px] sm:min-w-[160px] flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-all duration-150 ${
+                    isActive ? "bg-slate-100" : "hover:bg-slate-50 cursor-pointer"
+                  }`}
+                >
+                  <div
+                    className={`h-8 w-8 rounded-md flex items-center justify-center transition-all duration-150 shrink-0 ${
+                      isActive
+                        ? "bg-slate-900 text-white"
+                        : isCompleted
+                        ? "bg-slate-200 text-slate-600"
+                        : "bg-slate-100 text-slate-400"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p
+                      className={`text-sm font-medium leading-tight truncate ${
+                        isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
+                      }`}
+                    >
+                      {step.title}
+                    </p>
+                    <p className="text-[11px] text-slate-400 truncate">{step.subtitle}</p>
+                  </div>
+                </button>
+              )
+            })}
           </div>
-          <div className="flex justify-between mr-3">
-            <p className="text-sm text-slate-500">
-              Last updated at {agent?.updated_at ? formatDate(agent.updated_at) : "N/A"}
-            </p>
-          </div>
-        </div>
+        </aside>
 
+        {/* Step Content */}
+        <main className="flex-1 overflow-auto p-6 sm:p-8">
+          <div className="w-full max-w-4xl mx-auto">
+        {/* Configure Layout */}
+        <div className="space-y-4">
 
-
-
-        {/* Two Column Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-
-          {/* Left Column - Settings */}
-          <div className="space-y-4">
+          {/* Section Content */}
+          <div className="grid grid-cols-1 gap-6">
+            {/* Left Column - Settings */}
+            <div className="space-y-6">
             {/* LLM Settings */}
-            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <div className={`bg-white rounded-xl border border-slate-200 overflow-hidden ${editStep === 2 ? "" : "hidden"}`}>
               <button
                 onClick={() => setLlmSettingsOpen(!llmSettingsOpen)}
                 className="w-full p-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
@@ -1043,408 +1037,277 @@ export default function AgentDetailPage() {
               )}
             </div>
 
-            {/* Voice Settings */}
-            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm transition-all duration-200">
-              <button
-                onClick={() => setVoiceSettingsOpen(!voiceSettingsOpen)}
-                className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors group outline-none focus-visible:ring focus-visible:ring-slate-300"
-                aria-expanded={voiceSettingsOpen}
-                aria-controls="voiceSettings-content"
-              >
-                <div className="flex items-center gap-4">
-                  <span className="bg-slate-100 rounded-lg flex items-center justify-center h-9 w-9">
-                    <Volume2 className="h-5 w-5 text-slate-700" />
-                  </span>
-                  <span className="font-semibold text-slate-900 text-lg tracking-tight">Voice Settings</span>
-                </div>
-                <span
-                  className={`transition-transform duration-200 ${voiceSettingsOpen ? "rotate-180" : ""
-                    }`}
-                >
-                  <ChevronDown className="h-5 w-5 text-slate-400 group-hover:text-slate-600" />
-                </span>
-              </button>
-              {voiceSettingsOpen && (
-                <div
-                  id="voiceSettings-content"
-                  className="px-8 py-6 space-y-7 border-t border-slate-100 grid gap-8"
-                >
-                  {/* Language */}
-                  <div className="grid gap-2">
-                    <label className="text-base font-semibold text-slate-800 mb-2 flex items-center gap-2">
-                      <Globe className="h-4 w-4 text-slate-400 mb-0.5" />
-                      Language<span className="text-red-500 text-base ml-1">*</span>
-                    </label>
-                    {allLanguages.length > 0 ? (
-                      <Popover open={languageOpen} onOpenChange={setLanguageOpen}>
-                        <PopoverTrigger asChild>
-                          <Button
-                            variant="outline"
-                            role="combobox"
-                            aria-expanded={languageOpen}
-                            className="w-full max-w-md min-h-[48px] py-3 px-4 justify-between rounded-lg border-slate-200 bg-white text-base font-medium hover:bg-slate-50 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 text-left [&>div]:whitespace-normal"
-                          >
-                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                              <Languages className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                              <span className="truncate">{language || "Select language..."}</span>
-                            </div>
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-[400px] p-0" align="start">
-                          <Command>
-                            <CommandInput placeholder="Search languages..." />
-                            <CommandList>
-                              <CommandEmpty>No language found.</CommandEmpty>
-                              <CommandGroup heading="Languages">
-                                {allLanguages.map((lang) => (
-                                  <CommandItem
-                                    key={lang}
-                                    value={lang}
-                                    onSelect={() => {
-                                      setLanguage(lang);
+            {/* Audio Settings */}
+            <div className={`${editStep === 3 ? "space-y-4" : "hidden"}`}>
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h3 className="text-2xl font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                  <Languages className="h-5 w-5 text-slate-400" />
+                  Configure Language
+                </h3>
+                <div className="space-y-3">
+                  <label className="text-base font-bold text-slate-900">Language</label>
+                  {allLanguages.length > 0 ? (
+                    <Popover open={languageOpen} onOpenChange={setLanguageOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          role="combobox"
+                          aria-expanded={languageOpen}
+                          className="w-full min-h-[48px] py-3 px-4 justify-between rounded-lg border-slate-200 bg-white text-base font-medium hover:bg-slate-50 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 text-left [&>div]:whitespace-normal"
+                        >
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <Languages className="h-4 w-4 text-blue-500 flex-shrink-0" />
+                            <span className="truncate">{language || "Select language..."}</span>
+                          </div>
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-[400px] p-0" align="start">
+                        <Command>
+                          <CommandInput placeholder="Search languages..." />
+                          <CommandList>
+                            <CommandEmpty>No language found.</CommandEmpty>
+                            <CommandGroup heading="Languages">
+                              {allLanguages.map((lang) => (
+                                <CommandItem
+                                  key={lang}
+                                  value={lang}
+                                  onSelect={() => {
+                                    setLanguage(lang)
+                                    if (lang && lang !== "English (United States)" && lang !== "English (India)") {
+                                      const sttLangData = sttData.stt.languages[lang as keyof typeof sttData.stt.languages]
+                                      if (sttLangData?.models?.ai4bharat && Array.isArray(sttLangData.models.ai4bharat) && sttLangData.models.ai4bharat.length > 0) {
+                                        setSttProvider("ai4bharat")
+                                        setSttModel(sttLangData.models.ai4bharat[0])
+                                      } else {
+                                        setSttProvider("")
+                                        setSttModel("")
+                                      }
 
-                                      // Auto-select ai4bharat for languages other than English (United States) and English (India)
-                                      if (lang && lang !== "English (United States)" && lang !== "English (India)") {
-                                        // Check if ai4bharat is available for STT
-                                        const sttLangData = sttData.stt.languages[lang as keyof typeof sttData.stt.languages]
-                                        if (sttLangData?.models?.ai4bharat && Array.isArray(sttLangData.models.ai4bharat) && sttLangData.models.ai4bharat.length > 0) {
-                                          setSttProvider("ai4bharat")
-                                          setSttModel(sttLangData.models.ai4bharat[0]) // Use first available model
+                                      const ttsLangData = ttsData.tts.languages[lang as keyof typeof ttsData.tts.languages]
+                                      const ttsAi4bharatData = ttsLangData?.models?.ai4bharat as { available?: boolean; model?: string; voices?: string[] } | undefined
+                                      if (ttsAi4bharatData?.available && ttsAi4bharatData.model) {
+                                        setTtsProvider("ai4bharat")
+                                        setTtsModel(ttsAi4bharatData.model)
+                                        if (ttsAi4bharatData.voices && Array.isArray(ttsAi4bharatData.voices) && ttsAi4bharatData.voices.length > 0) {
+                                          setTtsVoice(ttsAi4bharatData.voices[0])
+                                          setTtsDescription(
+                                            descriptionsData && descriptionsData.length > 0
+                                              ? descriptionsData[0].description
+                                              : ""
+                                          )
                                         } else {
-                                          setSttProvider("")
-                                          setSttModel("")
-                                        }
-
-                                        // Check if ai4bharat is available for TTS
-                                        const ttsLangData = ttsData.tts.languages[lang as keyof typeof ttsData.tts.languages]
-                                        const ttsAi4bharatData = ttsLangData?.models?.ai4bharat as { available?: boolean; model?: string; voices?: string[] } | undefined
-                                        if (ttsAi4bharatData?.available && ttsAi4bharatData.model) {
-                                          setTtsProvider("ai4bharat")
-                                          setTtsModel(ttsAi4bharatData.model)
-                                          // Set first voice if available
-                                          if (ttsAi4bharatData.voices && Array.isArray(ttsAi4bharatData.voices) && ttsAi4bharatData.voices.length > 0) {
-                                            setTtsVoice(ttsAi4bharatData.voices[0])
-                                            // Set first description from descriptionsData if available
-                                            setTtsDescription(
-                                              descriptionsData && descriptionsData.length > 0
-                                                ? descriptionsData[0].description
-                                                : ""
-                                            )
-                                          } else {
-                                            setTtsVoice("")
-                                            setTtsDescription("")
-                                          }
-                                        } else {
-                                          setTtsProvider("")
-                                          setTtsModel("")
                                           setTtsVoice("")
                                           setTtsDescription("")
                                         }
                                       } else {
-                                        // Reset providers for English languages
-                                        setSttProvider("")
-                                        setSttModel("")
                                         setTtsProvider("")
                                         setTtsModel("")
                                         setTtsVoice("")
                                         setTtsDescription("")
                                       }
-
-                                      setLanguageOpen(false);
-                                    }}
-                                    className="py-2.5"
-                                  >
-                                    <span className="font-medium">{lang}</span>
-                                  </CommandItem>
-                                ))}
-                              </CommandGroup>
-                            </CommandList>
-                          </Command>
-                        </PopoverContent>
-                      </Popover>
-                    ) : (
-                      <div className="px-3 py-2 text-base text-slate-500 border border-slate-200 rounded-lg bg-slate-50">
-                        Loading languages...
-                      </div>
-                    )}
-                  </div>
-
-                  {/* STT and TTS stacked (one below other) */}
-                  {language && (
-                    <div className="flex flex-col gap-8">
-                      {/* STT Section */}
-                      <section>
-                        <label className="text-base font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                          <Mic className="h-4 w-4 text-slate-400 mb-0.5" />
-                          Speech-to-Text (STT)
-                        </label>
-                        <div className="space-y-5 mt-3">
-                          {/* STT Provider */}
-                          <div>
-                            <label className="text-xs font-semibold text-slate-500 mb-2 block">Provider</label>
-                            <Select
-                              value={sttProvider}
-                              onValueChange={(v) => {
-                                setSttProvider(v);
-                                setSttModel("");
-                              }}
-                            >
-                              <SelectTrigger className="border-slate-200 focus:ring-2 focus:ring-slate-200 rounded-md h-11 bg-slate-50 hover:bg-slate-100 transition-colors">
-                                <SelectValue placeholder="Select provider" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {allSTTProviders
-                                  .filter((p) => supportedSTTProviders.has(p.id))
-                                  .map((provider) => {
-                                    // AI4Bharat is on-prem, always available (no API key needed)
-                                    const isOnPrem = provider.id === "ai4bharat"
-                                    // Check if provider has integration (API key configured)
-                                    const isIntegrated = isOnPrem || integratedProviders.has(provider.id) || integratedProviders.has(provider.name.toLowerCase())
-                                    
-                                    return (
-                                      <SelectItem
-                                        key={provider.id}
-                                        value={provider.id}
-                                        className="text-base px-3 py-2 rounded-md data-[state=checked]:bg-slate-100 data-[highlighted]:bg-slate-50"
-                                        disabled={!isIntegrated}
-                                      >
-                                        <div className="flex items-center gap-2">
-                                          <span>{provider.name}</span>
-                                          {!isIntegrated && (
-                                            <span className="text-xs text-slate-400">(not integrated)</span>
-                                          )}
-                                        </div>
-                                      </SelectItem>
-                                    )
-                                  })}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {/* STT Model */}
-                          {sttProvider && (
-                            <div>
-                              <label className="text-xs font-semibold text-slate-500 mb-2 block">Model</label>
-                              <Select
-                                value={sttModel}
-                                onValueChange={setSttModel}
-                                disabled={supportedSTTModels.size === 0}
-                              >
-                                <SelectTrigger className="border-slate-200 rounded-md h-11 bg-slate-50 hover:bg-slate-100 transition-colors">
-                                  <SelectValue placeholder="Select model" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {Array.from(supportedSTTModels).map((model) => (
-                                    <SelectItem
-                                      key={model}
-                                      value={model}
-                                      className="font-mono text-base px-3 py-2 rounded-md data-[state=checked]:bg-slate-100 data-[highlighted]:bg-slate-50"
-                                    >
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          )}
-                        </div>
-                      </section>
-                      {/* TTS Section */}
-                      <section>
-                        <label className="text-base font-semibold text-slate-800 mb-4 flex items-center gap-2">
-                          <Volume2 className="h-4 w-4 text-slate-400 mb-0.5" />
-                          Text-to-Speech (TTS)
-                        </label>
-                        <div className="space-y-5 mt-3">
-                          {/* TTS Provider */}
-                          <div>
-                            <label className="text-xs font-semibold text-slate-500 mb-2 block">Provider</label>
-                            <Select
-                              value={ttsProvider}
-                              onValueChange={(v) => {
-                                setTtsProvider(v);
-                                setTtsModel("");
-                                setTtsVoice("");
-                                setTtsDescription("");
-                              }}
-                            >
-                              <SelectTrigger className="border-slate-200 focus:ring-2 focus:ring-slate-200 rounded-md h-11 bg-slate-50 hover:bg-slate-100 transition-colors">
-                                <SelectValue placeholder="Select provider" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {allTTSProviders
-                                  .filter((p) => supportedTTSProviders.has(p.id))
-                                  .map((provider) => {
-                                    // AI4Bharat is on-prem, always available (no API key needed)
-                                    const isOnPrem = provider.id === "ai4bharat"
-                                    // Check if provider has integration (API key configured)
-                                    const isIntegrated = isOnPrem || integratedProviders.has(provider.id) || integratedProviders.has(provider.name.toLowerCase())
-                                    
-                                    return (
-                                      <SelectItem
-                                        key={provider.id}
-                                        value={provider.id}
-                                        className="text-base px-3 py-2 rounded-md data-[state=checked]:bg-slate-100 data-[highlighted]:bg-slate-50"
-                                        disabled={!isIntegrated}
-                                      >
-                                        <div className="flex items-center gap-2">
-                                          <span>{provider.name}</span>
-                                          {!isIntegrated && (
-                                            <span className="text-xs text-slate-400">(not integrated)</span>
-                                          )}
-                                        </div>
-                                      </SelectItem>
-                                    )
-                                  })}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          {/* TTS Model */}
-                          {ttsProvider && (
-                            <div>
-                              <label className="text-xs font-semibold text-slate-500 mb-2 block">Model</label>
-                              <Select
-                                value={ttsModel}
-                                onValueChange={setTtsModel}
-                                disabled={supportedTTSModels.size === 0}
-                              >
-                                <SelectTrigger className="border-slate-200 rounded-md h-11 bg-slate-50 hover:bg-slate-100 transition-colors">
-                                  <SelectValue placeholder="Select model" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {Array.from(supportedTTSModels).map((model) => (
-                                    <SelectItem
-                                      key={model}
-                                      value={model}
-                                      className="font-mono text-base px-3 py-2 rounded-md data-[state=checked]:bg-slate-100 data-[highlighted]:bg-slate-50"
-                                    >
-                                      {model}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          )}
-                          {/* TTS Voice & Speed */}
-                          {ttsModel && ttsProvider && (
-                            <>
-                              {/* Voice or Voice ID */}
-                              {(ttsProvider === "gcp" || ttsProvider === "cartesia" || ttsProvider === "elevenlabs") ? (
-                                <div>
-                                  <label className="text-xs font-semibold text-slate-500 mb-2 block">
-                                    Voice ID
-                                    <span className="ml-2 text-slate-400 text-xs tracking-normal">
-                                      (copy from provider dashboard)
-                                    </span>
-                                  </label>
-                                  <Input
-                                    value={ttsVoice}
-                                    onChange={(e) => setTtsVoice(e.target.value)}
-                                    placeholder={ttsProvider === "elevenlabs" ? "e.g. 21m00Tcm4TlvDq8ikWAM (Rachel)" : "Enter voice ID"}
-                                    className="h-11 border-slate-200 rounded-md bg-slate-50 focus:border-slate-400"
-                                  />
-                                </div>
-                              ) : (
-                                <div>
-                                  <label className="text-xs font-semibold text-slate-500 mb-2 block">Voice</label>
-                                  <Select
-                                    value={ttsVoice}
-                                    onValueChange={setTtsVoice}
-                                    disabled={availableTTSVoices.length === 0}
-                                  >
-                                    <SelectTrigger className="border-slate-200 rounded-md h-11 bg-slate-50 hover:bg-slate-100 transition-colors">
-                                      <SelectValue placeholder="Select voice" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {availableTTSVoices.map((voice) => (
-                                        <SelectItem
-                                          key={voice}
-                                          value={voice}
-                                          className="text-base px-3 py-2 rounded-md data-[state=checked]:bg-slate-100 data-[highlighted]:bg-slate-50"
-                                        >
-                                          {voice}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-
-                                  {/* TTS Description for AI4Bharat and Bhashini */}
-                                  {(ttsProvider === "ai4bharat" || ttsProvider === "bhashini") && (
-                                    <div className="mt-3">
-                                      <label className="text-xs font-semibold text-slate-500 mb-2 block">
-                                        Voice Description
-                                      </label>
-
-                                      <Select
-                                        value={ttsDescription}
-                                        onValueChange={setTtsDescription}
-                                        disabled={availableTTSDescriptions.length === 0}
-                                      >
-                                        <SelectTrigger className="min-h-[64px] w-full py-3 px-4 rounded-lg border-slate-200 bg-white font-medium hover:bg-slate-50 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all text-left">
-                                          <SelectValue>
-                                            {ttsDescription
-                                              ? (ttsDescription.length > 25
-                                                ? `${ttsDescription.slice(0, 25)}...`
-                                                : ttsDescription)
-                                              : "Select a voice description to customize voice characteristics"}
-                                          </SelectValue>
-                                        </SelectTrigger>
-
-                                        <SelectContent className="rounded-lg max-h-[300px] w-[600px]">
-                                          {availableTTSDescriptions.map((description) => (
-                                            <SelectItem
-                                              key={description}
-                                              value={description}
-                                              className="py-3 px-3"
-                                            >
-                                              <span className="text-sm leading-relaxed block whitespace-normal">
-                                                {description}
-                                              </span>
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                    </div>
-                                  )}
-
-
-
-                                </div>
-                              )}
-
-                              {/* Speed */}
-                              <div className="mt-3">
-                                <div className="flex items-center justify-between mb-2">
-                                  <label className="text-xs font-semibold text-slate-500">Speed</label>
-                                  <span className="text-xs font-mono text-slate-700 bg-white px-2.5 py-0.5 rounded border border-slate-200">{speed.toFixed(1)}x</span>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                  <span className="text-xs text-slate-500 min-w-[2.5rem]">0.5x</span>
-                                  <Slider
-                                    value={[speed]}
-                                    onValueChange={([value]) => setSpeed(value)}
-                                    min={0.5}
-                                    max={2.0}
-                                    step={0.1}
-                                    className="flex-1"
-                                  />
-                                  <span className="text-xs text-slate-500 min-w-[2.5rem] text-right">2.0x</span>
-                                </div>
-                                <p className="text-xs text-slate-500 mt-1">Speaking pace (1.0 = normal)</p>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </section>
+                                    } else {
+                                      setSttProvider("")
+                                      setSttModel("")
+                                      setTtsProvider("")
+                                      setTtsModel("")
+                                      setTtsVoice("")
+                                      setTtsDescription("")
+                                    }
+                                    setLanguageOpen(false)
+                                  }}
+                                  className="py-2.5"
+                                >
+                                  <span className="font-medium">{lang}</span>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          </CommandList>
+                        </Command>
+                      </PopoverContent>
+                    </Popover>
+                  ) : (
+                    <div className="px-3 py-2 text-base text-slate-500 border border-slate-200 rounded-lg bg-slate-50">
+                      Loading languages...
                     </div>
                   )}
                 </div>
-              )}
+              </div>
+
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h3 className="text-2xl font-semibold text-slate-900 mb-5 flex items-center gap-2">
+                  <Mic className="h-5 w-5 text-slate-400" />
+                  Speech-to-Text
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 block">Provider</label>
+                    <Select
+                      value={sttProvider}
+                      onValueChange={(v) => {
+                        setSttProvider(v)
+                        setSttModel("")
+                      }}
+                    >
+                      <SelectTrigger className="border-slate-200 rounded-md h-11 bg-white">
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allSTTProviders
+                          .filter((p) => supportedSTTProviders.has(p.id))
+                          .map((provider) => {
+                            const isOnPrem = provider.id === "ai4bharat"
+                            const isIntegrated = isOnPrem || integratedProviders.has(provider.id) || integratedProviders.has(provider.name.toLowerCase())
+                            return (
+                              <SelectItem key={provider.id} value={provider.id} disabled={!isIntegrated}>
+                                <div className="flex items-center gap-2">
+                                  <span>{provider.name}</span>
+                                  {!isIntegrated && <span className="text-xs text-slate-400">(not integrated)</span>}
+                                </div>
+                              </SelectItem>
+                            )
+                          })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 block">Model</label>
+                    <Select value={sttModel} onValueChange={setSttModel} disabled={!sttProvider || supportedSTTModels.size === 0}>
+                      <SelectTrigger className="border-slate-200 rounded-md h-11 bg-white">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Array.from(supportedSTTModels).map((model) => (
+                          <SelectItem key={model} value={model} className="font-mono text-sm">
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl border border-slate-200 p-6">
+                <h3 className="text-2xl font-semibold text-slate-900 mb-5 flex items-center gap-2">
+                  <Volume2 className="h-5 w-5 text-slate-400" />
+                  Text-to-Speech
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 block">Provider</label>
+                    <Select
+                      value={ttsProvider}
+                      onValueChange={(v) => {
+                        setTtsProvider(v)
+                        setTtsModel("")
+                        setTtsVoice("")
+                        setTtsDescription("")
+                      }}
+                    >
+                      <SelectTrigger className="border-slate-200 rounded-md h-11 bg-white">
+                        <SelectValue placeholder="Select provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allTTSProviders
+                          .filter((p) => supportedTTSProviders.has(p.id))
+                          .map((provider) => {
+                            const isOnPrem = provider.id === "ai4bharat"
+                            const isIntegrated = isOnPrem || integratedProviders.has(provider.id) || integratedProviders.has(provider.name.toLowerCase())
+                            return (
+                              <SelectItem key={provider.id} value={provider.id} disabled={!isIntegrated}>
+                                <div className="flex items-center gap-2">
+                                  <span>{provider.name}</span>
+                                  {!isIntegrated && <span className="text-xs text-slate-400">(not integrated)</span>}
+                                </div>
+                              </SelectItem>
+                            )
+                          })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 block">Model</label>
+                    <Select value={ttsModel} onValueChange={setTtsModel} disabled={!ttsProvider || supportedTTSModels.size === 0}>
+                      <SelectTrigger className="border-slate-200 rounded-md h-11 bg-white">
+                        <SelectValue placeholder="Select model" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Array.from(supportedTTSModels).map((model) => (
+                          <SelectItem key={model} value={model} className="font-mono text-sm">
+                            {model}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-semibold text-slate-700 mb-2 block">Voice</label>
+                    {(ttsProvider === "gcp" || ttsProvider === "cartesia" || ttsProvider === "elevenlabs") ? (
+                      <Input
+                        value={ttsVoice}
+                        onChange={(e) => setTtsVoice(e.target.value)}
+                        placeholder={ttsProvider === "elevenlabs" ? "Enter voice ID" : "Enter voice ID"}
+                        className="h-11 border-slate-200 rounded-md bg-white"
+                      />
+                    ) : (
+                      <Select value={ttsVoice} onValueChange={setTtsVoice} disabled={!ttsProvider || availableTTSVoices.length === 0}>
+                        <SelectTrigger className="border-slate-200 rounded-md h-11 bg-white">
+                          <SelectValue placeholder="Select voice" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableTTSVoices.map((voice) => (
+                            <SelectItem key={voice} value={voice}>
+                              {voice}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                </div>
+
+                {(ttsProvider === "ai4bharat" || ttsProvider === "bhashini") && (
+                  <div className="mt-4">
+                    <label className="text-sm font-semibold text-slate-700 mb-2 block">Voice Description</label>
+                    <Select value={ttsDescription} onValueChange={setTtsDescription} disabled={availableTTSDescriptions.length === 0}>
+                      <SelectTrigger className="min-h-[64px] w-full py-3 px-4 rounded-lg border-slate-200 bg-white text-left">
+                        <SelectValue>
+                          {ttsDescription
+                            ? (ttsDescription.length > 25 ? `${ttsDescription.slice(0, 25)}...` : ttsDescription)
+                            : "Select a voice description to customize voice characteristics"}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="rounded-lg max-h-[300px] w-[600px]">
+                        {availableTTSDescriptions.map((description) => (
+                          <SelectItem key={description} value={description} className="py-3 px-3">
+                            <span className="text-sm leading-relaxed block whitespace-normal">{description}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {ttsModel && ttsProvider && (
+                  <div className="mt-5">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-semibold text-slate-700">Speed rate</label>
+                      <span className="text-sm font-mono text-slate-700 bg-white px-2.5 py-0.5 rounded border border-slate-200">{speed.toFixed(1)}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-slate-500 min-w-[2.5rem]">0.5</span>
+                      <Slider value={[speed]} onValueChange={([value]) => setSpeed(value)} min={0.5} max={2.0} step={0.1} className="flex-1" />
+                      <span className="text-xs text-slate-500 min-w-[2.5rem] text-right">2.0</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
           {/* Right Column - Agent configuration */}
-          <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <div className="space-y-6">
+            <div className={`bg-white rounded-xl border border-slate-200 p-6 sm:p-8 ${editStep === 1 ? "" : "hidden"}`}>
               <h2 className="text-lg font-semibold text-slate-900 mb-4">
                 Agent configuration
               </h2>
@@ -1480,7 +1343,7 @@ export default function AgentDetailPage() {
 
 
             </div>
-            <div className="bg-white rounded-xl border border-slate-200 p-6">
+            <div className={`bg-white rounded-xl border border-slate-200 p-6 sm:p-8 ${editStep === 4 ? "" : "hidden"}`}>
               <h2 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
                 <Phone size={20} className="text-blue-500" />
                 Telephony Info
@@ -1527,8 +1390,50 @@ export default function AgentDetailPage() {
               </div>
             </div>
           </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <Button
+              variant="outline"
+              onClick={handlePreviousStep}
+              disabled={editStep === 1}
+              className="h-11 px-6 rounded-lg border-slate-200"
+            >
+              Previous
+            </Button>
+
+            {editStep < editWizardSteps.length ? (
+              <Button
+                onClick={handleNextStep}
+                className="h-11 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium gap-2"
+              >
+                Next
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            ) : (
+              <Button
+                onClick={handleSaveClick}
+                disabled={isSaving || !hasChanges}
+                className="h-11 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium gap-2 disabled:bg-slate-200 disabled:text-slate-400"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-4 w-4" />
+                    Save Changes
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
+          </div>
+        </div>
         </div>
       </main>
+      </div>
 
       {/* Confirmation Modal */}
       <Dialog open={showConfirmModal} onOpenChange={setShowConfirmModal}>

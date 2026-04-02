@@ -1012,12 +1012,12 @@ export default function AssistantsPage() {
         </div>
       </header>
 
-      {/* Main Content - Two Column Layout */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Column - Progress Stepper */}
-        <aside className="w-72 bg-white border-r border-slate-100 p-5">
-          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-5">Setup Progress</h3>
-          <div className="space-y-1">
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top Row - Progress Stepper */}
+        <aside className="bg-white border-b border-slate-100 p-3 sm:p-4">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 text-center">Setup Progress</h3>
+          <div className="flex gap-2 overflow-x-auto pb-1 justify-center">
             {wizardSteps.map((step) => {
               const Icon = step.icon
               const isActive = createStep === step.id
@@ -1025,11 +1025,11 @@ export default function AssistantsPage() {
               const isAccessible = canAccessStep(step.id)
 
               return (
-              <button
+                <button
                   key={step.id}
                   onClick={() => isAccessible && setCreateStep(step.id)}
                   disabled={!isAccessible}
-                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-all duration-150 ${
+                  className={`shrink-0 min-w-[140px] sm:min-w-[160px] flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-all duration-150 ${
                     isActive
                       ? "bg-slate-100"
                       : isAccessible
@@ -1038,38 +1038,38 @@ export default function AssistantsPage() {
                 }`}
               >
                 <div
-                    className={`h-9 w-9 rounded-lg flex items-center justify-center transition-all duration-150 ${
-                      isActive
+                  className={`h-8 w-8 rounded-md flex items-center justify-center transition-all duration-150 shrink-0 ${
+                    isActive
                       ? "bg-slate-900 text-white"
-                        : isCompleted
-                        ? "bg-slate-200 text-slate-600"
-                        : "bg-slate-100 text-slate-400"
+                      : isCompleted
+                      ? "bg-slate-200 text-slate-600"
+                      : "bg-slate-100 text-slate-400"
                   }`}
                 >
-                    <Icon className="h-4 w-4" />
+                  <Icon className="h-4 w-4" />
                 </div>
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`text-sm font-medium truncate ${
-                        isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
-                      }`}
-                    >
-                      {step.title}
-                    </p>
-                    <p className="text-xs text-slate-400 truncate">{step.subtitle}</p>
-                  </div>
-                  {isCompleted && (
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
-                  )}
+                <div className="flex-1 min-w-0">
+                  <p
+                    className={`text-sm font-medium leading-tight truncate ${
+                      isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
+                    }`}
+                  >
+                    {step.title}
+                  </p>
+                  <p className="text-[11px] text-slate-400 truncate">{step.subtitle}</p>
+                </div>
+                {isCompleted && (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
+                )}
               </button>
               )
             })}
           </div>
         </aside>
 
-        {/* Right Column - Step Content */}
-        <main className="flex-1 overflow-auto p-8">
-          <div className="max-w-4xl">
+        {/* Step Content */}
+        <main className="flex-1 overflow-auto p-6 sm:p-8">
+          <div className="w-full max-w-4xl mx-auto">
             {/* Step 1: Agent Creation */}
             {createStep === 1 && (
               <div className="bg-white rounded-xl border border-slate-200 p-8">
