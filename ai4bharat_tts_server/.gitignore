@@ -1,8 +1,9 @@
 checkpoints
 __pycache__
 files/
-venv
+.venv
+*.wav
+venv/
 *.ipynb
-notebooks/
 
 

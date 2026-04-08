@@ -1,7 +1,9 @@
+from typing_extensions import ValuesView
 import torch
 from inference.config import device
 import math
 import flashinfer
+import time
 
 
 class PageTable:
@@ -97,11 +99,12 @@ class PageTable:
             .int()
             .to(device)
         )
-        last_page_lens = (
-            torch.Tensor([self.pid_mem_sizes[pid] for pid in sorted_pids])
-            .int()
-            .to(device)
-            % self.page_size
+        mem_sizes = torch.Tensor([self.pid_mem_sizes[pid] for pid in sorted_pids]).int()
+        last_page_lens = (mem_sizes % self.page_size).to(device)
+        last_page_lens = torch.where(
+            (mem_sizes > 0).to(device) & (last_page_lens == 0),
+            torch.full_like(last_page_lens, self.page_size),
+            last_page_lens,
         )
 
         return page_indices, page_indptr, last_page_lens
@@ -119,6 +122,8 @@ class PageTable:
             # deal with last page carefully
             last_page = self.pid_page_table[pid][-1]
             last_page_len = self.pid_mem_sizes[pid] % self.page_size
+            if self.pid_mem_sizes[pid] > 0 and last_page_len == 0:
+                last_page_len = self.page_size
             attn_mask[
                 bid,
                 last_page * self.page_size : last_page * self.page_size + last_page_len,
@@ -132,7 +137,7 @@ class PageTable:
         return attn_mask.to(device)
 
 
-class VirtualMemory:
+class VirtualMemoryPaged:
     def __init__(self, max_num_pages, page_size, num_kv_heads, head_dim, num_layers):
         self.paged_model_kv_cache = [
             torch.zeros(
@@ -184,6 +189,9 @@ class VirtualMemory:
                 kv_indptr=kv_indptr,
                 kv_last_page_len=kv_last_page_len,
             )
+
+    def free(self, pid):
+        self.page_table.free(pid)
 
     def get_decode_closures(self):
         sorted_pids = sorted(self.page_table.pid_mem_sizes.keys())
@@ -238,3 +246,179 @@ class VirtualMemory:
             ).unsqueeze(2)
 
         return _cache_updater, _attn
+
+
+class VirtualMemorySDPA:
+    def __init__(self, max_num_pages, page_size, num_kv_heads, head_dim, num_layers):
+        self.pid_kv_cache = {}
+
+    def prefill(self, pid, model_kv_cache):
+        assert model_kv_cache[0][0].shape[0] == 1
+        self.pid_kv_cache[pid] = model_kv_cache
+
+    def get_decode_closures(self):
+        sorted_pids = sorted(self.pid_kv_cache.keys())
+
+        def _cache_updater(layer_id, append_kv):
+
+            time_ = time.time()
+            for bid, pid in enumerate(sorted_pids):
+                # keys
+                self.pid_kv_cache[pid][layer_id] = (
+                    torch.cat(
+                        [
+                            self.pid_kv_cache[pid][layer_id][0],
+                            append_kv[0][bid].unsqueeze(0),
+                        ],
+                        dim=2,
+                    ),
+                    torch.cat(
+                        [
+                            self.pid_kv_cache[pid][layer_id][1],
+                            append_kv[1][bid].unsqueeze(0),
+                        ],
+                        dim=2,
+                    ),
+                )
+            # print("cache updater time: ", 1000 * (time.time() - time_), "seconds")
+
+        def _attn_(layer_id, q):
+            num_seqs = q.shape[2]
+            assert num_seqs == 1, "decode step assumes only 1 token decoded per batch"
+
+            sorted_pids = sorted(self.pid_kv_cache.keys())
+            attn = []
+            keys = []
+            values = []
+
+            for bid, pid in enumerate(sorted_pids):
+                key = self.pid_kv_cache[pid][layer_id][0]
+                value = self.pid_kv_cache[pid][layer_id][1]
+                assert key.shape[0] == 1
+
+                bid_attn_output = torch.nn.functional.scaled_dot_product_attention(
+                    q[bid].unsqueeze(0), key, value
+                )
+                attn.append(bid_attn_output)
+                keys.append(key[0])
+                values.append(value[0])
+
+            attn_output_ = torch.cat(attn, dim=0)
+
+            return attn_output_
+
+        def _attn(layer_id, q):
+            time_0 = time.time()
+            num_seqs = q.shape[2]
+            assert num_seqs == 1, "decode step assumes only 1 token decoded per batch"
+
+            sorted_pids = sorted(self.pid_kv_cache.keys())
+
+            keys_list = [
+                self.pid_kv_cache[pid][layer_id][0].squeeze(0) for pid in sorted_pids
+            ]
+            values_list = [
+                self.pid_kv_cache[pid][layer_id][1].squeeze(0) for pid in sorted_pids
+            ]
+            # each: (num_heads, seq_len_i, head_dim)
+
+            seq_lens = [k.shape[1] for k in keys_list]
+            max_len = max(seq_lens)
+            batch = len(sorted_pids)
+            num_heads, _, head_dim = keys_list[0].shape
+
+            # Pad k/v to (batch, num_heads, max_len, head_dim)
+            keys_padded = torch.zeros(
+                batch, num_heads, max_len, head_dim, device=q.device, dtype=q.dtype
+            )
+            values_padded = torch.zeros(
+                batch, num_heads, max_len, head_dim, device=q.device, dtype=q.dtype
+            )
+            for i, (k, v, slen) in enumerate(zip(keys_list, values_list, seq_lens)):
+                keys_padded[i, :, :slen, :] = k
+                values_padded[i, :, :slen, :] = v
+
+            mask = torch.zeros(batch, 1, 1, max_len, device=q.device, dtype=torch.bool)
+            for i, slen in enumerate(seq_lens):
+                mask[i, :, :, :slen] = True
+            additive_mask = torch.zeros(
+                batch, 1, 1, max_len, device=q.device, dtype=q.dtype
+            )
+            additive_mask.masked_fill_(~mask, float("-inf"))
+
+            time_ = time.time()
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                q, keys_padded, values_padded, attn_mask=additive_mask
+            )
+
+            # attn_output_fp16 = torch.nn.functional.scaled_dot_product_attention(
+            #    q.half(), keys_padded.half(), values_padded.half(), attn_mask=additive_mask.half()
+            # )
+            # print("attention time: ", 1000 * (time.time() - time_), "ms")
+            # print("total calculation time: ", 1000 * (time.time() - time_0), "ms")
+
+            # attn_output_fp16 = attn_output_fp16 + torch.randn_like(attn_output_fp16) * 1e-1
+            # print((attn_output - attn_output_fp16).abs().max())
+
+            return attn_output
+
+        return _cache_updater, _attn
+
+    def free(self, pid):
+        del self.pid_kv_cache[pid]
+
+
+class VirtualMemoryCompare:
+    def __init__(self, max_num_pages, page_size, num_kv_heads, head_dim, num_layers):
+        self.vm_paged = VirtualMemoryPaged(
+            max_num_pages, page_size, num_kv_heads, head_dim, num_layers
+        )
+        self.vm_sdpa = VirtualMemorySDPA(
+            max_num_pages, page_size, num_kv_heads, head_dim, num_layers
+        )
+
+    def prefill(self, pid, model_kv_cache):
+        self.vm_paged.prefill(pid, model_kv_cache)
+        self.vm_sdpa.prefill(pid, model_kv_cache)
+
+    def get_decode_closures(self):
+        paged_cache_updater, paged_attn = self.vm_paged.get_decode_closures()
+        sdpa_cache_updater, sdpa_attn = self.vm_sdpa.get_decode_closures()
+
+        def _cache_updater(layer_id, append_kv):
+            paged_cache_updater(layer_id, append_kv)
+            sdpa_cache_updater(layer_id, append_kv)
+
+        def _attn(layer_id, q):
+            out_paged = paged_attn(layer_id, q)
+            out_sdpa = sdpa_attn(layer_id, q)
+
+            diff = (out_paged - out_sdpa).float()
+            max_abs = diff.abs().max()
+
+            if max_abs > 1e-2:
+                print(f"max_abs={max_abs:.6g}")
+            return out_paged
+
+        return _cache_updater, _attn
+
+    def free(self, pid):
+        self.vm_paged.free(pid)
+        self.vm_sdpa.free(pid)
+
+
+def VirtualMemory(
+    max_num_pages, page_size, num_kv_heads, head_dim, num_layers, type="sdpa"
+):
+    if type == "paged":
+        return VirtualMemoryPaged(
+            max_num_pages, page_size, num_kv_heads, head_dim, num_layers
+        )
+    elif type == "sdpa":
+        return VirtualMemorySDPA(
+            max_num_pages, page_size, num_kv_heads, head_dim, num_layers
+        )
+    elif type == "compare":
+        return VirtualMemoryCompare(
+            max_num_pages, page_size, num_kv_heads, head_dim, num_layers
+        )

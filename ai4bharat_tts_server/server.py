@@ -19,6 +19,7 @@ import threading
 import uuid
 
 import numpy as np
+import torch
 import websockets
 
 from inference.runner import ParlerTTSModelRunner, TTSRequest
@@ -29,6 +30,7 @@ AUDIO_SAMPLE_RATE = 44100
 here = os.path.dirname(os.path.abspath(__file__))
 
 
+@torch.no_grad()
 def inference_worker(
     runner: ParlerTTSModelRunner,
     prefill_q: queue.Queue,
@@ -142,7 +144,7 @@ async def main_async(
     checkpoint_path: str,
     decode_every: int,
 ) -> None:
-    runner = ParlerTTSModelRunner(checkpoint_path)
+    runner = ParlerTTSModelRunner(checkpoint_path, play_steps=decode_every)
     prefill_q: queue.Queue = queue.Queue()
     stop_evt = threading.Event()
 

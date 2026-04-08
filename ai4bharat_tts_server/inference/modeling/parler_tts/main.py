@@ -65,8 +65,10 @@ class ParlerTTS(torch.nn.Module):
             transformers.DacConfig(
                 sampling_rate=44100,
             )
-        ).half()
+        )
+        self.eval()
         self._load_weights()
+        self.half()
 
     def _load_weights(self):
         def _sub_state_dict(prefix, model_weights):
@@ -81,6 +83,10 @@ class ParlerTTS(torch.nn.Module):
             os.path.join(self.checkpoint_dir, "parles_tts_state_dict.pt"),
             map_location=torch.device("cpu"),
             weights_only=True,
+        )
+
+        self.description_encoder.load_state_dict(
+            _sub_state_dict("text_encoder", model_weights)
         )
 
         self.embed_prompt.load_state_dict(

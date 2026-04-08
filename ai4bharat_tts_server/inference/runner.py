@@ -15,7 +15,7 @@ class TTSRequest:
         self.decoder_input_ids = []
         self.decoder_position_ids = []
         self.token_cache = []
-
+        self.audio_to_yield = 0
 
     def __repr__(self):
         return f"""TTSRequest(
@@ -27,9 +27,8 @@ class TTSRequest:
     )
     """
 
-
 class ParlerTTSModelRunner:
-    def __init__(self, checkpoint_path):
+    def __init__(self, checkpoint_path, play_steps=60):
         self.model = ParlerTTS(checkpoint_path).eval().to(device)
         num_kv_heads = self.model.config["text_encoder"]["num_heads"]
         head_dim = self.model.config["decoder"]["hidden_size"] // num_kv_heads
@@ -37,16 +36,18 @@ class ParlerTTSModelRunner:
         self.self_attn_vmem = VirtualMemory(
             max_num_pages=1024,
             num_kv_heads=num_kv_heads,
-            page_size=16,
+            page_size=8,
             head_dim=head_dim,
             num_layers=num_layers,
+            type="paged",
         )
         self.cross_attn_vmem = VirtualMemory(
             max_num_pages=1024,
             num_kv_heads=num_kv_heads,
-            page_size=16,
+            page_size=8,
             head_dim=head_dim,
             num_layers=num_layers,
+            type="paged",
         )
         self.topk_processor = transformers.TopKLogitsWarper(top_k=50)
         self.num_codebooks = self.model.config["decoder"]["num_codebooks"]
@@ -54,6 +55,10 @@ class ParlerTTSModelRunner:
         self.eos_token_id = self.model.config["decoder"]["eos_token_id"]
         self.running_requests = {}
         self._pending_audio_decode = {}
+        dac_cfg = self.model.dac.config
+        hop = math.floor(dac_cfg.sampling_rate / dac_cfg.frame_rate)
+        print(dac_cfg.sampling_rate, dac_cfg.frame_rate)
+        self._audio_stride = max(0, hop * (play_steps - self.num_codebooks) // 6)
 
     def _stacked_audio_codes_from_timeline(self, audio_tokens):
         # Strip delay/boundary framing; need T = L - num_codebooks - 1 >= 1 for DAC.
@@ -217,13 +222,18 @@ class ParlerTTSModelRunner:
             if to_stop:
                 self.evict(self.running_requests[pid])
 
+    def free(self, request):
+        self.self_attn_vmem.free(request.pid)
+        self.cross_attn_vmem.free(request.pid)
+
     def evict(self, request):
         audio = self._audio_numpy_from_token_cache(request.token_cache)
         if audio is not None:
-            self._pending_audio_decode[request.pid] = audio
+            tail = audio[request.audio_to_yield :]
+            if tail.size:
+                self._pending_audio_decode[request.pid] = tail
         del self.running_requests[request.pid]
-        self.self_attn_vmem.page_table.free(request.pid)
-        self.cross_attn_vmem.page_table.free(request.pid)
+        self.free(request)
 
     def decode_audio_parts(self, list_of_audio_ids):
         audio_ids_e = torch.cat(list_of_audio_ids, -1)
@@ -256,15 +266,21 @@ class ParlerTTSModelRunner:
                 continue
             list_of_audio_tokens.append(audio_tokens_fixed)
             decoded_pids.append(pid)
-            self.running_requests[pid].token_cache = []
 
         if len(list_of_audio_tokens) == 0:
             return audio_dict
         self.list_of_audio_tokens = list_of_audio_tokens
         audio_arrays = self.decode_audio_parts(list_of_audio_tokens)
-        audio_dict.update(
-            {pid: audio_arr for pid, audio_arr in zip(decoded_pids, audio_arrays)}
-        )
+        S = self._audio_stride
+        for pid, audio_arr in zip(decoded_pids, audio_arrays):
+            req = self.running_requests[pid]
+            t0 = req.audio_to_yield
+            if S > 0 and len(audio_arr) > t0 + S:
+                req.audio_to_yield = len(audio_arr) - S
+                audio_dict[pid] = audio_arr[t0:-S]
+            elif S == 0 and len(audio_arr) > t0:
+                req.audio_to_yield = len(audio_arr)
+                audio_dict[pid] = audio_arr[t0:]
         return audio_dict
 
 

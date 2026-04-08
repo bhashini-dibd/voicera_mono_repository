@@ -12,7 +12,7 @@ here = os.path.dirname(__file__)
 def test_runner_obj():
     model_runner = ParlerTTSModelRunner(os.path.join(here, "checkpoints"))
 
-    bs = 8
+    bs = 4
     requests = [
         TTSRequest(
             prompt="अरे, तुम आज कैसे हो? कैसे हो? कैसे हो? कैसे हो?",
@@ -31,7 +31,7 @@ def test_runner_obj():
         model_runner.step()
 
         if idx== 100:
-            bs = 8
+            bs = 4
             requests = [
                 TTSRequest(
                     prompt="अरे, तुम आज कैसे हो? कैसे हो? कैसे हो? कैसे हो?",
@@ -45,7 +45,10 @@ def test_runner_obj():
         model_runner.check_stopping_criteria()
         print("model runner step",len(model_runner.running_requests),1000 * (time.time() - start),)
         if idx%60==0:
+            time_taken = time.time()
             model_runner.audio_decode()
+            time_taken = time.time() - time_taken
+            print("time taken to decode", time_taken)
 
     model_runner.audio_decode()
 

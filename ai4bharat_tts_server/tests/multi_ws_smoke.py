@@ -206,11 +206,11 @@ async def async_main(
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Many staggered WS TTS clients + latency stats")
-    p.add_argument("-n", "--requests", type=int, default=10, help="Number of parallel clients (default 10)")
+    p.add_argument("-n", "--requests", type=int, default=16, help="Number of parallel clients (default 10)")
     p.add_argument(
         "--gap-ms",
         type=float,
-        default=20.0,
+        default=40.0,
         help="Delay between starting each client: client i sleeps i * gap (default 20)",
     )
     p.add_argument("--uri", default="ws://127.0.0.1:8002")
