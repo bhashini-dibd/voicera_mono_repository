@@ -830,6 +830,220 @@ export async function deleteKnowledgeDocument(
   return response.json()
 }
 
+// Batches (immutable CSV uploads + parsed contacts)
+export interface Batch {
+  batch_id: string
+  org_id: string
+  batch_name: string
+  agent_type: string
+  concurrency: number
+  original_filename: string
+  status: string
+  execution_status: string
+  total_contacts: number
+  valid_contacts: number
+  invalid_contacts: number
+  attempted_calls?: number
+  successful_calls?: number
+  failed_calls?: number
+  error_message?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface BatchUploadResponse {
+  batch_id: string
+  org_id: string
+  batch_name: string
+  agent_type: string
+  concurrency: number
+  original_filename: string
+  status: string
+  total_contacts: number
+  valid_contacts: number
+  invalid_contacts: number
+  created_at?: string | null
+}
+
+export interface BatchDeleteResponse {
+  deleted: boolean
+}
+
+export interface BatchActionResponse {
+  status: string
+  message: string
+}
+
+/**
+ * List batches for the current organization.
+ */
+export async function getBatches(agentType?: string): Promise<Batch[]> {
+  const query = agentType
+    ? `?agent_type=${encodeURIComponent(agentType)}`
+    : ""
+  const response = await fetchApiRoute(`/api/batches${query}`)
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(
+      (error as { detail?: string }).detail ||
+        (error as { error?: string }).error ||
+        "Failed to fetch batches"
+    )
+  }
+
+  return response.json()
+}
+
+/**
+ * Upload a batch CSV and parse contacts server-side.
+ */
+export async function uploadBatchCsv(
+  file: File,
+  orgId: string,
+  agentType: string,
+  batchName: string
+): Promise<BatchUploadResponse> {
+  const token = getAuthToken()
+  if (!token) {
+    throw new Error("No authentication token found")
+  }
+
+  const formData = new FormData()
+  formData.append("file", file)
+  formData.append("org_id", orgId)
+  formData.append("agent_type", agentType)
+  formData.append("batch_name", batchName)
+
+  const response = await fetch("/api/batches", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  })
+
+  if (response.status === 401) {
+    clearAuth()
+    if (typeof window !== "undefined") {
+      window.location.href = "/"
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(
+      (error as { detail?: string }).detail ||
+        (error as { error?: string }).error ||
+        "Failed to upload batch CSV"
+    )
+  }
+
+  return response.json()
+}
+
+/**
+ * Delete a batch and its parsed contacts.
+ */
+export async function deleteBatch(batchId: string): Promise<BatchDeleteResponse> {
+  const encodedBatchId = encodeURIComponent(batchId)
+  const response = await fetchApiRoute(`/api/batches/${encodedBatchId}`, {
+    method: "DELETE",
+  })
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(
+      (error as { detail?: string }).detail ||
+        (error as { error?: string }).error ||
+        "Failed to delete batch"
+    )
+  }
+
+  return response.json()
+}
+
+/**
+ * Start batch execution.
+ */
+export async function runBatch(
+  batchId: string,
+  agentType?: string,
+  concurrency?: number
+): Promise<BatchActionResponse> {
+  const token = getAuthToken()
+  if (!token) {
+    throw new Error("No authentication token found")
+  }
+
+  const encodedBatchId = encodeURIComponent(batchId)
+  const response = await fetch(`/api/batches/${encodedBatchId}/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      agent_type: agentType,
+      concurrency,
+    }),
+  })
+
+  if (response.status === 401) {
+    clearAuth()
+    if (typeof window !== "undefined") {
+      window.location.href = "/"
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(
+      (error as { detail?: string }).detail ||
+        (error as { error?: string }).error ||
+        "Failed to run batch"
+    )
+  }
+
+  return response.json()
+}
+
+/**
+ * Stop batch execution.
+ */
+export async function stopBatch(batchId: string): Promise<BatchActionResponse> {
+  const token = getAuthToken()
+  if (!token) {
+    throw new Error("No authentication token found")
+  }
+
+  const encodedBatchId = encodeURIComponent(batchId)
+  const response = await fetch(`/api/batches/${encodedBatchId}/stop`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (response.status === 401) {
+    clearAuth()
+    if (typeof window !== "undefined") {
+      window.location.href = "/"
+    }
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(
+      (error as { detail?: string }).detail ||
+        (error as { error?: string }).error ||
+        "Failed to stop batch"
+    )
+  }
+
+  return response.json()
+}
+
 // Member types
 export interface Member {
   email: string

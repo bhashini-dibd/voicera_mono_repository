@@ -330,6 +330,90 @@ async def update_meeting_end_time(
         logger.error(f"❌ Failed to update meeting end time: {e}")
         logger.debug(f"API endpoint: {api_endpoint}, payload: {payload}")
         return False
+
+
+def fetch_batch_agent_call_config(org_id: str, agent_type: str) -> Optional[Dict[str, Any]]:
+    backend_url = _get_backend_url()
+    api_endpoint = f"{backend_url}/api/v1/batches/worker/agent-config"
+    headers = _get_api_headers()
+    try:
+        response = requests.post(
+            api_endpoint,
+            json={"org_id": org_id, "agent_type": agent_type},
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        logger.error(f"Failed to fetch batch agent call config: {e}")
+        return None
+
+
+def claim_next_batch_contact(org_id: str, batch_id: str) -> Optional[Dict[str, Any]]:
+    backend_url = _get_backend_url()
+    api_endpoint = f"{backend_url}/api/v1/batches/worker/claim-next"
+    headers = _get_api_headers()
+    try:
+        response = requests.post(
+            api_endpoint,
+            json={"org_id": org_id, "batch_id": batch_id},
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json() if response.text else {}
+        if not isinstance(data, dict):
+            return None
+        contact = data.get("contact")
+        return contact if isinstance(contact, dict) else None
+    except Exception as e:
+        logger.error(f"Failed to claim next batch contact: {e}")
+        return None
+
+
+def report_batch_contact_result(
+    *,
+    org_id: str,
+    batch_id: str,
+    row_number: int,
+    ok: bool,
+    error: Optional[str] = None,
+) -> None:
+    backend_url = _get_backend_url()
+    api_endpoint = f"{backend_url}/api/v1/batches/worker/report"
+    headers = _get_api_headers()
+    try:
+        requests.post(
+            api_endpoint,
+            json={
+                "org_id": org_id,
+                "batch_id": batch_id,
+                "row_number": row_number,
+                "ok": ok,
+                "error": error,
+            },
+            headers=headers,
+            timeout=10,
+        ).raise_for_status()
+    except Exception as e:
+        logger.error(f"Failed to report batch contact result: {e}")
+
+
+def finalize_batch_execution(org_id: str, batch_id: str, stopped: bool) -> None:
+    backend_url = _get_backend_url()
+    api_endpoint = f"{backend_url}/api/v1/batches/worker/finalize"
+    headers = _get_api_headers()
+    try:
+        requests.post(
+            api_endpoint,
+            json={"org_id": org_id, "batch_id": batch_id, "stopped": stopped},
+            headers=headers,
+            timeout=10,
+        ).raise_for_status()
+    except Exception as e:
+        logger.error(f"Failed to finalize batch execution: {e}")
     except Exception as e:
         logger.error(f"❌ Error updating meeting end time: {e}")
         logger.debug(traceback.format_exc())

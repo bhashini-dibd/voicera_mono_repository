@@ -47,6 +47,11 @@ class Settings:
     VOBIZ_ACCOUNT_ID: str = os.getenv("VOBIZ_ACCOUNT_ID", "")
     VOBIZ_AUTH_ID: str = os.getenv("VOBIZ_AUTH_ID", "")
     VOBIZ_AUTH_TOKEN: str = os.getenv("VOBIZ_AUTH_TOKEN", "")
+    VOICE_SERVER_URL: str = (
+        os.getenv("VOICE_SERVER_URL")
+        or os.getenv("JOHNAIC_SERVER_URL")
+        or "http://localhost:7860"
+    )
     
     @property
     def mongodb_uri(self) -> str:
@@ -59,4 +64,3 @@ class Settings:
 
 # Global settings instance
 settings = Settings()
-
