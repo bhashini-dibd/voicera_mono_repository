@@ -1,198 +1,197 @@
+"""
+WebSocket TTS server: continuous batching with the same loop as test_parler_tts.py
+(prefill when a request arrives, step all running requests together, stream PCM chunks).
+
+Client sends one JSON object per utterance:
+  {"prompt": "...", "description": "..."}
+
+Server first sends a small JSON metadata frame, then binary frames (float32 mono PCM),
+then a final JSON {"type": "done"}.
+"""
+from __future__ import annotations
+
+import argparse
 import asyncio
-import base64
 import json
 import os
-import socket
-from contextlib import asynccontextmanager
-from threading import Thread, Event
-from typing import AsyncGenerator
+import queue
+import threading
+import uuid
 
 import numpy as np
-import torch
-import uvicorn
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from parler_tts import ParlerTTSForConditionalGeneration, ParlerTTSStreamer
-from pydantic import BaseModel, Field
-from transformers import AutoTokenizer
-from loguru import logger
+import websockets
+
+from inference.runner import ParlerTTSModelRunner, TTSRequest
+
+# Hugging Face DAC for Parler-style models is typically 24 kHz mono.
+AUDIO_SAMPLE_RATE = 44100
+
+here = os.path.dirname(os.path.abspath(__file__))
 
 
-class TTSRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=5000)
-    description: str = Field(default="A clear, natural voice with good audio quality.")
-    speaker: str = Field(default="Divya")
-    play_steps_in_s: float = Field(default=0.5, gt=0, le=2.0)
+def inference_worker(
+    runner: ParlerTTSModelRunner,
+    prefill_q: queue.Queue,
+    stop_evt: threading.Event,
+    decode_every: int,
+) -> None:
+    """
+    Runs forever: drain new requests (prefill), then one decode step for the whole batch.
+    New jobs can arrive anytime; each iteration prefills everything pending before stepping.
+
+    audio_decode() runs every ``decode_every`` steps (same idea as test_parler_tts.py using 60),
+    and always on a step that evicts a request so DAC still sees final _pending_audio_decode.
+    """
+    pending_out: dict[str, queue.Queue] = {}
+    step_count = 0
+
+    while not stop_evt.is_set():
+        # 1) Prefill every new request waiting in the queue (continuous batching intake).
+        while True:
+            try:
+                job = prefill_q.get_nowait()
+            except queue.Empty:
+                break
+            if job is None:
+                return
+            req: TTSRequest
+            out_q: queue.Queue
+            req, out_q = job
+            pending_out[req.pid] = out_q
+            try:
+                runner.prefill(req)
+            except Exception as e:
+                out_q.put(("error", str(e)))
+                pending_out.pop(req.pid, None)
+
+        # 2) One global step (batched over all running sequences), same as the test file.
+        if runner.running_requests:
+            pids_before = set(runner.running_requests.keys())
+            runner.step()
+            runner.check_stopping_criteria()
+            pids_after = set(runner.running_requests.keys())
+            evicted = pids_before - pids_after
+            step_count += 1
+
+            should_audio_decode = bool(evicted) or (step_count % decode_every == 0)
+            audio_dict = runner.audio_decode() if should_audio_decode else {}
+
+            for pid, arr in audio_dict.items():
+                q_out = pending_out.get(pid)
+                if q_out is not None:
+                    q_out.put(("audio", arr))
+
+            for pid in evicted:
+                q_out = pending_out.pop(pid, None)
+                if q_out is not None:
+                    q_out.put(("done", None))
+        else:
+            stop_evt.wait(0.005)
 
 
-class ModelState:
-    def __init__(self):
-        self.model = None
-        self.tokenizer = None
-        self.description_tokenizer = None
-        self.device = None
-        self.torch_dtype = None
-        self.frame_rate = None
-        self.sample_rate = None
-        self.is_loaded = False
-
-
-state = ModelState()
-
-
-async def load_model():
-    state.device = "cuda:1" if torch.cuda.is_available() else "cpu"
-    state.torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-
-    hf_token = os.getenv("HF_TOKEN")
-    token_kwargs = {"token": hf_token} if hf_token else {}
-
-    state.model = ParlerTTSForConditionalGeneration.from_pretrained(
-        "ai4bharat/indic-parler-tts",
-        torch_dtype=state.torch_dtype,
-        attn_implementation={"decoder": "sdpa", "text_encoder": "eager"},
-        **token_kwargs,
-    ).to(state.device)
-
-    state.tokenizer = AutoTokenizer.from_pretrained(
-        "ai4bharat/indic-parler-tts",
-        **token_kwargs,
-    )
-    state.description_tokenizer = AutoTokenizer.from_pretrained(
-        state.model.config.text_encoder._name_or_path,
-        **token_kwargs,
-    )
-
-    state.frame_rate = state.model.audio_encoder.config.frame_rate
-    state.sample_rate = state.model.config.sampling_rate
-    state.is_loaded = True
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await load_model()
-    yield
-    if state.model is not None:
-        del state.model
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-
-app = FastAPI(title="Indic Parler TTS API", version="2.0.0", lifespan=lifespan)
-
-
-async def generate_audio_chunks(
-    request: Request,
-    text: str,
-    description: str,
-    speaker: str,
-    play_steps_in_s: float,
-) -> AsyncGenerator[bytes, None]:
-    full_description = f"{speaker}'s voice. {description}"
-    play_steps = int(state.frame_rate * play_steps_in_s)
-
-    streamer = ParlerTTSStreamer(state.model, device=state.device, play_steps=play_steps)
-
-    description_inputs = state.description_tokenizer(
-        full_description, return_tensors="pt"
-    ).to(state.device)
-
-    prompt_inputs = state.tokenizer(text, return_tensors="pt").to(state.device)
-
-    generation_kwargs = {
-        "input_ids": description_inputs.input_ids,
-        "attention_mask": description_inputs.attention_mask,
-        "prompt_input_ids": prompt_inputs.input_ids,
-        "prompt_attention_mask": prompt_inputs.attention_mask,
-        "streamer": streamer,
-        "do_sample": True,
-        "temperature": 0.7,
-    }
-
-    generation_complete = Event()
-
-    def run_generation():
-        try:
-            state.model.generate(**generation_kwargs)
-        finally:
-            generation_complete.set()
-
-    thread = Thread(target=run_generation)
-    thread.start()
-
-    client_disconnected = False
+async def handle_client(
+    websocket: websockets.ServerProtocol,
+    runner: ParlerTTSModelRunner,
+    prefill_q: queue.Queue,
+) -> None:
+    try:
+        raw = await websocket.recv()
+    except websockets.ConnectionClosed:
+        return
 
     try:
-        for new_audio in streamer:
-            if new_audio.shape[0] == 0:
-                break
+        msg = json.loads(raw)
+        prompt = msg["prompt"]
+        description = msg["description"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        await websocket.send(json.dumps({"type": "error", "message": f"bad request: {e}"}))
+        return
 
-            if await request.is_disconnected():
-                client_disconnected = True
-                break
+    out_q: queue.Queue = queue.Queue()
+    pid = uuid.uuid4().hex[:8]
+    req = TTSRequest(prompt=prompt, description=description, pid=pid)
+    prefill_q.put((req, out_q))
 
-            audio_int16 = (np.clip(new_audio, -1.0, 1.0) * 32767).astype(np.int16)
-            chunk_data = {
-                "audio": base64.b64encode(audio_int16.tobytes()).decode("utf-8"),
-                "sample_rate": state.sample_rate,
-                "samples": new_audio.shape[0],
+    await websocket.send(
+        json.dumps(
+            {
+                "type": "meta",
+                "pid": pid,
+                "sample_rate": AUDIO_SAMPLE_RATE,
+                "dtype": "float32",
+                "channels": 1,
             }
-            logger.info(f"Audio chunk going out: {len(audio_int16.tobytes())} bytes")
-            yield json.dumps(chunk_data) + "\n"
-
-        if not client_disconnected:
-            yield json.dumps({"done": True}) + "\n"
-
-    finally:
-        generation_complete.wait()
-        thread.join()
-
-        del description_inputs, prompt_inputs
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-
-@app.post("/tts/stream")
-async def stream_tts(request: Request, tts_request: TTSRequest):
-    if not state.is_loaded:
-        raise HTTPException(status_code=503, detail="Model not loaded")
-
-    if not tts_request.text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-
-    return StreamingResponse(
-        generate_audio_chunks(
-            request=request,
-            text=tts_request.text,
-            description=tts_request.description,
-            speaker=tts_request.speaker,
-            play_steps_in_s=tts_request.play_steps_in_s,
-        ),
-        media_type="application/x-ndjson",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Content-Type-Options": "nosniff",
-            "X-Accel-Buffering": "no",
-        },
+        )
     )
 
+    while True:
+        kind, payload = await asyncio.to_thread(out_q.get)
+        if kind == "error":
+            await websocket.send(json.dumps({"type": "error", "message": payload}))
+            return
+        if kind == "audio":
+            await websocket.send(payload.astype(np.float32).tobytes())
+        elif kind == "done":
+            await websocket.send(json.dumps({"type": "done", "pid": pid}))
+            return
 
-@app.get("/health")
-async def health():
-    return {
-        "status": "healthy" if state.is_loaded else "loading",
-        "device": str(state.device) if state.device else None,
-        "sample_rate": state.sample_rate,
-        "model_loaded": state.is_loaded,
-    }
+
+async def main_async(
+    host: str,
+    port: int,
+    checkpoint_path: str,
+    decode_every: int,
+) -> None:
+    runner = ParlerTTSModelRunner(checkpoint_path)
+    prefill_q: queue.Queue = queue.Queue()
+    stop_evt = threading.Event()
+
+    thread = threading.Thread(
+        target=inference_worker,
+        args=(runner, prefill_q, stop_evt, decode_every),
+        daemon=True,
+    )
+    thread.start()
+
+    async with websockets.serve(
+        lambda ws: handle_client(ws, runner, prefill_q),
+        host,
+        port,
+        max_size=None,
+    ):
+        print(
+            f"TTS WebSocket server ws://{host}:{port} "
+            f"(checkpoints={checkpoint_path}, decode_every={decode_every})"
+        )
+        await asyncio.Future()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Parler TTS WebSocket server (continuous batching)")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8002)
+    parser.add_argument(
+        "--checkpoint",
+        default=os.path.join(here, "checkpoints"),
+        help="Model checkpoint directory",
+    )
+    parser.add_argument(
+        "--decode-every",
+        type=int,
+        default=60,
+        metavar="N",
+        help=(
+            "Call audio_decode every N global steps (test_parler_tts.py uses 60). "
+            "Always decodes on steps that finish a request. Default 1 = decode every step."
+        ),
+    )
+    args = parser.parse_args()
+    if args.decode_every < 1:
+        parser.error("--decode-every must be >= 1")
+    asyncio.run(
+        main_async(args.host, args.port, args.checkpoint, args.decode_every),
+    )
 
 
 if __name__ == "__main__":
-    config = uvicorn.Config(app, host="0.0.0.0", port=8002)
-    server = uvicorn.Server(config)
-    
-    sock = config.bind_socket()
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    logger.info("TCP_NODELAY enabled - Nagle's algorithm disabled")
-    
-    asyncio.run(server.serve(sockets=[sock]))
+    main()

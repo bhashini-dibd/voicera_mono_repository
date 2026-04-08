@@ -1,6 +1,8 @@
-venv/
-__pycache__/
-*.env
-rough.ipynb
-checkpoints/
-notebook.ipynb
+checkpoints
+__pycache__
+files/
+venv
+*.ipynb
+notebooks/
+
+
