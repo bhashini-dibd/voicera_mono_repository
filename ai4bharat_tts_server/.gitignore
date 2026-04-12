@@ -1,9 +1,10 @@
-checkpoints
+checkpoints/
+checkpoints_bhili/
 __pycache__
 files/
 .venv
 *.wav
 venv/
 *.ipynb
-
+.env
 
