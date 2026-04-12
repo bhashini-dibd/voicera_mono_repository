@@ -4,9 +4,10 @@ import os
 import socket
 import json
 import traceback
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from loguru import logger
 from dotenv import load_dotenv
@@ -24,6 +25,7 @@ from .backend_utils import (
     fetch_agent_config_from_backend,
     fetch_integration_key,
 )
+from .batching import create_batch_router
 
 
 load_dotenv()
@@ -186,6 +188,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(telemetry_router)
+app.include_router(create_batch_router(make_outbound_call_vobiz))
 
 
 # === Routes ===
