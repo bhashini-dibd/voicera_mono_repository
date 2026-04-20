@@ -26,6 +26,7 @@ from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
 # Local services
 from services.kenpath_llm.llm import KenpathLLM
+from services.sarvam_llm.llm import SarvamLLM
 from services.ai4bharat.tts import IndicParlerRESTTTSService
 from services.ai4bharat.stt import IndicConformerRESTSTTService
 from services.bhashini.stt import BhashiniSTTService
@@ -207,6 +208,20 @@ def create_llm_service(
             params=params,
             retry_timeout_secs=float(args.get("retry_timeout_secs", 20.0)),
             retry_on_timeout=bool(args.get("retry_on_timeout", False)),
+        )
+        service._user_aggregator_params = user_aggregator_params
+        return service
+    elif isinstance(provider_normalized, str) and provider_normalized.lower() == "sarvam":
+        api_key = os.getenv("SARVAM_LLM_API_KEY", "").strip()
+        if not api_key:
+            raise ServiceCreationError(
+                "SARVAM_LLM_API_KEY is required for Sarvam LLM. Set it in your .env file."
+            )
+        user_aggregator_params = LLMUserAggregatorParams(
+            aggregation_timeout=args.get("aggregation_timeout", 0.05)
+        )
+        service = SarvamLLM(
+            model=get_llm_model("Sarvam", model),
         )
         service._user_aggregator_params = user_aggregator_params
         return service

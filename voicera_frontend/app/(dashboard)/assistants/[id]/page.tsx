@@ -137,6 +137,12 @@ const llmProviders = {
       "o1-preview",
     ],
   },
+  sarvam: {
+    name: "Sarvam",
+    models: [
+      "sarvamai/sarvam-30b",
+    ],
+  },
   qwen: {
     name: "Qwen",
     models: [
@@ -825,10 +831,10 @@ export default function AgentDetailPage() {
                 >
                   <div
                     className={`h-8 w-8 rounded-md flex items-center justify-center transition-all duration-150 shrink-0 ${isActive
-                        ? "bg-slate-900 text-white"
-                        : isCompleted
-                          ? "bg-slate-200 text-slate-600"
-                          : "bg-slate-100 text-slate-400"
+                      ? "bg-slate-900 text-white"
+                      : isCompleted
+                        ? "bg-slate-200 text-slate-600"
+                        : "bg-slate-100 text-slate-400"
                       }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -898,8 +904,8 @@ export default function AgentDetailPage() {
                             </SelectTrigger>
                             <SelectContent className="z-[100] rounded-md shadow-lg">
                               {Object.entries(llmProviders).map(([id, provider]) => {
-                                // OpenAI, Qwen, and Kenpath are always available (built-in)
-                                const isBuiltIn = id === "openai" || id === "qwen" || id === "kenpath"
+                                // OpenAI, Sarvam, Qwen, and Kenpath are always available (env-based / built-in)
+                                const isBuiltIn = id === "openai" || id === "sarvam" || id === "qwen" || id === "kenpath"
                                 // Check if provider has integration (API key configured)
                                 const isIntegrated = integratedProviders.has(id) || integratedProviders.has(provider.name.toLowerCase())
                                 const isAvailable = isBuiltIn || isIntegrated
