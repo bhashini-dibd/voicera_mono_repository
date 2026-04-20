@@ -151,7 +151,7 @@ Agent configs are JSON files in `agent_configs/`. Example:
 | Provider | Name | Models |
 |----------|------|--------|
 | OpenAI | `openai` | gpt-4o, gpt-4o-mini, gpt-3.5-turbo |
-| Kenpath | `kenpath` | Custom LLM |
+| Kenpath | `kenpath` | Vistaar streaming API; agent language **`bhb`** uses Voice Bhili `GET` JSON API (`KENPATH_VOICE_BHILI_URL`) |
 
 ### STT (Speech-to-Text)
 | Provider | Name | Models |
@@ -218,6 +218,9 @@ Agent configs are JSON files in `agent_configs/`. Example:
 | `GOOGLE_TTS_CREDENTIALS_PATH` | * | credentials/google_tts.json | Google TTS credentials |
 | `INDIC_STT_SERVER_URL` | * | - | AI4Bharat STT HTTP server base URL (no path); `/transcribe` or `/transcribe/bhili` is appended (`bhb` language uses the latter) |
 | `INDIC_TTS_SERVER_URL` | * | - | AI4Bharat TTS server URL |
+| `KENPATH_JWT_PRIVATE_KEY_PATH` | * | - | Path to RS256 private key PEM for Kenpath Vistaar `/api/voice/stream` (not used for Voice Bhili) |
+| `KENPATH_VISTAAR_API_URL` | No | `https://voice-prod.mahapocra.gov.in` | Base URL for Kenpath streaming `GET .../api/voice/` |
+| `KENPATH_VOICE_BHILI_URL` | No | `https://vistaar-dev.mahapocra.gov.in/api/voice-bhili` | Voice Bhili JSON API: when agent `language` is `bhb`, Kenpath LLM uses this GET endpoint (dev) |
 
 \* Required based on configured providers
 

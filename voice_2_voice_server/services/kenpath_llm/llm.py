@@ -8,7 +8,7 @@ import asyncio
 import codecs
 import jwt
 import time
-from typing import Optional
+from typing import Iterator, Optional
 from pathlib import Path
 import uuid
 import os
@@ -26,6 +26,12 @@ KENPATH_MARATHI_HOLD_MESSAGES = [
     "एक क्षण थांबा, मी तपासत आहे",
     "कृपया प्रतीक्षा करा, मी उत्तर शोधत आहे",
     "थोडा वेळ द्या, मी माहिती मिळवत आहे",
+]
+KENPATH_BHILI_HOLD_MESSAGES = [
+    "जाराक ऊबिरा, आय माहिती होदी रियोहं",
+    "एकूच घेडी ऊबिरा, आय तपासी रियोहं",
+    "जाराक वाट वेरा, आय उत्तर होदी दिहुव",
+    "बेन घेडी, आय माहिती मिलवुहू",
 ]
 
 
@@ -51,22 +57,40 @@ class KenpathLLM(OpenAILLMService):
         # Shared aiohttp session (created lazily)
         self._session: Optional[aiohttp.ClientSession] = None
 
-        # Language: Hindi -> Hindi hold messages and hi/hi; else Marathi (current behaviour)
+        # Voice Bhili (dev): GET JSON, no JWT — see KENPATH_VOICE_BHILI_URL
+        self._voice_bhili_url = os.environ.get(
+            "KENPATH_VOICE_BHILI_URL",
+            "https://vistaar-dev.mahapocra.gov.in/api/voice-bhili",
+        )
+
+        # Language: bhb -> Voice Bhili API; Hindi -> hi; else Marathi mr
         lang_lower = (language or "").strip().lower()
-        if lang_lower == "hindi":
-            self.hold_messages = list(KENPATH_HINDI_HOLD_MESSAGES)
-            self._source_lang = "hi"
-            self._target_lang = "hi"
+        if lang_lower == "bhb":
+            self._use_voice_bhili = True
+            self.hold_messages = list(KENPATH_BHILI_HOLD_MESSAGES)
+            self._source_lang = "bhb"
+            self._target_lang = "bhb"
         else:
-            self.hold_messages = list(KENPATH_MARATHI_HOLD_MESSAGES)
-            self._source_lang = "mr"
-            self._target_lang = "mr"
+            self._use_voice_bhili = False
+            if lang_lower == "hindi":
+                self.hold_messages = list(KENPATH_HINDI_HOLD_MESSAGES)
+                self._source_lang = "hi"
+                self._target_lang = "hi"
+            else:
+                self.hold_messages = list(KENPATH_MARATHI_HOLD_MESSAGES)
+                self._source_lang = "mr"
+                self._target_lang = "mr"
 
         self.hold_message_index = 0
 
-        logger.info(
-            f"🤖 KenpathLLM initialized | timeout={self.response_timeout}s | url={self._base_url} | lang={self._source_lang}"
-        )
+        if self._use_voice_bhili:
+            logger.info(
+                f"🤖 KenpathLLM initialized | Voice Bhili | timeout={self.response_timeout}s | url={self._voice_bhili_url}"
+            )
+        else:
+            logger.info(
+                f"🤖 KenpathLLM initialized | timeout={self.response_timeout}s | url={self._base_url} | lang={self._source_lang}"
+            )
         if self._vistaar_session_id:
             logger.info(f"📞 Vistaar session ID for this call: {self._vistaar_session_id}")
 
@@ -139,8 +163,12 @@ class KenpathLLM(OpenAILLMService):
             first_chunk = True
             chunk_count = 0
 
-            # Stream from Vistaar API
-            async for chunk in self._stream_vistaar_completions(user_message):
+            if self._use_voice_bhili:
+                stream = self._iter_voice_bhili_text(user_message)
+            else:
+                stream = self._stream_vistaar_completions(user_message)
+
+            async for chunk in stream:
 
                 if first_chunk:
                     first_chunk = False
@@ -165,6 +193,66 @@ class KenpathLLM(OpenAILLMService):
                     await timer_task
                 except asyncio.CancelledError:
                     pass
+
+    def _yield_word_chunks_from_text(self, text: str) -> Iterator[str]:
+        """Split plain text on whitespace/newlines; same chunk shape as streaming path."""
+        buffer = text
+        while " " in buffer or "\n" in buffer:
+            space_idx = buffer.find(" ")
+            newline_idx = buffer.find("\n")
+
+            if space_idx == -1 and newline_idx == -1:
+                break
+            elif space_idx == -1:
+                split_idx = newline_idx
+            elif newline_idx == -1:
+                split_idx = space_idx
+            else:
+                split_idx = min(space_idx, newline_idx)
+
+            word = buffer[:split_idx].strip()
+            buffer = buffer[split_idx + 1 :]
+
+            if word:
+                yield word + " "
+
+        if buffer.strip():
+            yield buffer.strip()
+
+    async def _iter_voice_bhili_text(self, query: str):
+        """GET Voice Bhili API; JSON {response: ...}; yield word chunks for TTS."""
+        session_id = self._vistaar_session_id or str(uuid.uuid4())
+        params = {
+            "query": query,
+            "session_id": session_id,
+            "source_lang": self._source_lang,
+            "target_lang": self._target_lang,
+        }
+        headers = {"Accept": "application/json"}
+
+        logger.info(
+            f"📡 Voice Bhili API | session_id={session_id} | query={query[:50]}..."
+        )
+
+        session = await self._get_session()
+        async with session.get(
+            self._voice_bhili_url, params=params, headers=headers
+        ) as response:
+            if response.status != 200:
+                error_text = await response.text()
+                logger.error(f"❌ Voice Bhili API error {response.status}: {error_text}")
+                raise Exception(f"Voice Bhili API Error {response.status}")
+
+            data = await response.json()
+            text = ""
+            if isinstance(data, dict):
+                text = data.get("response") or ""
+            if not (text or "").strip():
+                logger.warning("⚠️ Voice Bhili returned empty response")
+                return
+
+            for chunk in self._yield_word_chunks_from_text(text):
+                yield chunk
 
     async def _stream_vistaar_completions(
         self,

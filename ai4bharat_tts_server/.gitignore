@@ -6,3 +6,4 @@ files/
 *.wav
 venv/
 *.ipynb
+.env 
