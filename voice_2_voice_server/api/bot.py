@@ -21,7 +21,7 @@ from pipecat.processors.transcript_processor import TranscriptProcessor
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.utils.text.base_text_aggregator import BaseTextAggregator, Aggregation, AggregationType
-from typing import Any
+from typing import Any, Optional, Callable, Awaitable
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
@@ -37,6 +37,7 @@ from .services import (
 )
 # Import the new filter
 from services.audio.greeting_interruption_filter import GreetingInterruptionFilter
+from services.vllm_qwen import ensure_no_think_suffix
 from .call_recording_utils import submit_call_recording
 
 
@@ -135,7 +136,8 @@ async def run_bot(
     audiobuffer: AudioBufferProcessor,
     transcript: TranscriptProcessor,
     handle_sigint: bool = False,
-    vad_analyzer: Any = None
+    vad_analyzer: Any = None,
+    vistaar_session_id: Optional[str] = None,
 ) -> None:
     """Run the voice bot pipeline with the given configuration.
     
@@ -152,9 +154,18 @@ async def run_bot(
     logger.debug(f"Agent config: {json.dumps(agent_config, indent=2, default=str)}")
     
     try:
-        llm_config = agent_config.get("llm_model", {})
+        llm_config = dict(agent_config.get("llm_model", {}) or {})
         stt_config = agent_config.get("stt_model", {})
         tts_config = agent_config.get("tts_model", {})
+        llm_provider_name = str(llm_config.get("name") or "").strip().lower()
+        if llm_provider_name == "openai":
+            llm_config["knowledge_base_enabled"] = bool(
+                agent_config.get("knowledge_base_enabled", False)
+            )
+            llm_config["knowledge_document_ids"] = list(
+                agent_config.get("knowledge_document_ids") or []
+            )
+            llm_config["knowledge_top_k"] = int(agent_config.get("knowledge_top_k", 3) or 3)
         
         language = agent_config.get("language")
         if language:
@@ -162,16 +173,25 @@ async def run_bot(
                 stt_config["language"] = language
             if not tts_config.get("language"):
                 tts_config["language"] = language
+
+        org_id = agent_config.get("org_id")
      
-        llm = create_llm_service(llm_config)
-        stt = create_stt_service(stt_config, sample_rate, vad_analyzer=vad_analyzer)
-        tts = create_tts_service(tts_config, sample_rate)
+        llm = create_llm_service(
+            llm_config,
+            vistaar_session_id=vistaar_session_id,
+            language=agent_config.get("language"),
+            org_id=org_id,
+        )
+        stt = create_stt_service(stt_config, sample_rate, vad_analyzer=vad_analyzer, org_id=org_id)
+        tts = create_tts_service(tts_config, sample_rate, org_id=org_id)
         
         # Use fast aggregator (no lookahead/NLTK) for lower latency
         tts._aggregate_sentences = True
         tts._text_aggregator = FastPunctuationAggregator()
 
         system_prompt = agent_config.get("system_prompt", None)
+        if llm_provider_name in ("qwen", "localqwen", "vllm"):
+            system_prompt = ensure_no_think_suffix(system_prompt or "")
         context = OpenAILLMContext([{"role": "system", "content": system_prompt}])
         
         # Use stored user aggregator params if available (for OpenAI services)
@@ -238,7 +258,8 @@ async def bot(
     stream_sid: str,
     call_sid: str,
     agent_type: str,
-    agent_config: dict
+    agent_config: dict,
+    transcript_callback: Optional[Callable[[str, str, Optional[str]], Awaitable[None]]] = None,
 ) -> None:
     """Main bot entry point - sets up transport and runs the pipeline."""
     sample_rate = _get_sample_rate()
@@ -273,7 +294,7 @@ async def bot(
         sample_rate=sample_rate,
         params=VADParams(
             stop_secs=0.35,
-            min_volume=0.5,
+            min_volume=0.3,
             confidence=0.4,
             start_secs=0.1,
         )
@@ -336,9 +357,14 @@ async def bot(
             line = f"{timestamp}{message.role}: {message.content}"
             logger.info(f"Transcript: {line}")
             call_data["transcript_lines"].append(line)
+            if transcript_callback and message.content:
+                try:
+                    await transcript_callback(message.role, message.content, message.timestamp)
+                except Exception as callback_error:
+                    logger.debug(f"Transcript callback failed: {callback_error}")
     
     try:
-        await run_bot(transport, agent_config, audiobuffer, transcript, handle_sigint=False, vad_analyzer=vad_analyzer)
+        await run_bot(transport, agent_config, audiobuffer, transcript, handle_sigint=False, vad_analyzer=vad_analyzer, vistaar_session_id=call_sid)
     finally:
         logger.info(f"Saving call data for {call_sid}...")
         if call_data["audio_chunks"] and call_data["audio_sample_rate"] and call_data["audio_num_channels"]:
@@ -457,7 +483,7 @@ async def ubona_bot(
             call_data["transcript_lines"].append(f"{ts}{message.role}: {message.content}")
 
     try:
-        await run_bot(transport, agent_config, audiobuffer, transcript, vad_analyzer=vad_analyzer)
+        await run_bot(transport, agent_config, audiobuffer, transcript, vad_analyzer=vad_analyzer, vistaar_session_id=call_id)
     finally:
         logger.info(f"Saving call data for {call_id}...")
         if call_data["audio_chunks"] and call_data["audio_sample_rate"]:
