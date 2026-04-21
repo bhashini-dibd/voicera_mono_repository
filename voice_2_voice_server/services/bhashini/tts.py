@@ -66,6 +66,26 @@ def _decode(value) -> str:
     return str(value)
 
 
+def _to_pcm16_bytes(audio_chunk: np.ndarray) -> bytes:
+    """Convert Triton output audio tensor to mono PCM16 bytes."""
+    # Handle common model output dtype (float waveform in [-1, 1]).
+    if np.issubdtype(audio_chunk.dtype, np.floating):
+        pcm = (np.clip(audio_chunk, -1.0, 1.0) * 32767.0).astype(np.int16)
+        return pcm.tobytes()
+
+    # Handle integer tensors directly while preventing wraparound.
+    if audio_chunk.dtype == np.int16:
+        return audio_chunk.tobytes()
+
+    if np.issubdtype(audio_chunk.dtype, np.integer):
+        pcm = np.clip(audio_chunk, np.iinfo(np.int16).min, np.iinfo(np.int16).max).astype(np.int16)
+        return pcm.tobytes()
+
+    # Fallback for unexpected dtypes.
+    pcm = np.clip(audio_chunk.astype(np.float32), -1.0, 1.0)
+    return (pcm * 32767.0).astype(np.int16).tobytes()
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -273,11 +293,11 @@ class BhashiniTTSService(TTSService):
                 )
 
                 if status == "audio" and audio_chunk is not None and audio_chunk.size > 0:
-                    pcm_bytes = audio_chunk.astype(np.int16).tobytes()
+                    pcm_bytes = _to_pcm16_bytes(audio_chunk)
                     chunk_count += 1
                     logger.info(
-                        "TTS [RUN] 🔊 Audio chunk #{} | {} bytes | sample_rate={}Hz",
-                        chunk_count, len(pcm_bytes), self.sample_rate,
+                        "TTS [RUN] 🔊 Audio chunk #{} | {} bytes | sample_rate={}Hz dtype={}",
+                        chunk_count, len(pcm_bytes), self.sample_rate, str(audio_chunk.dtype),
                     )
                     yield TTSAudioRawFrame(
                         audio=pcm_bytes,
