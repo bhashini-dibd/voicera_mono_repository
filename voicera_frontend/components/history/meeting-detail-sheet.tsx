@@ -67,7 +67,7 @@ export function MeetingDetailSheet({
   // Fetch audio as blob and create object URL when recording URL is available
   useEffect(() => {
     const recordingUrl = meetingDetails?.recording_url || meeting?.recording_url
-    
+
     if (!recordingUrl || !open) {
       // Clean up previous object URL
       if (audioObjectUrl) {
@@ -240,12 +240,12 @@ export function MeetingDetailSheet({
   // Derived state for content availability
   const customVars = meetingDetails?.custom_variables || {}
   const transcriptMessages = meetingDetails?.transcript || meeting?.transcript || []
-  
+
   const hasSummaryContent = useMemo(() => {
     return Boolean(
-      customVars.summary || 
-      customVars.classification || 
-      (Array.isArray(customVars.key_points) && customVars.key_points.length > 0) || 
+      customVars.summary ||
+      customVars.classification ||
+      (Array.isArray(customVars.key_points) && customVars.key_points.length > 0) ||
       (Array.isArray(customVars.action_items) && customVars.action_items.length > 0)
     )
   }, [customVars])
@@ -298,9 +298,9 @@ export function MeetingDetailSheet({
     setActiveTab(defaultTab)
   }, [defaultTab])
 
-  
 
-  
+
+
 
   const togglePlay = () => {
     if (!wavesurfer) return
@@ -322,12 +322,41 @@ export function MeetingDetailSheet({
     }
   }
 
-  
 
-  const downloadAudio = () => {
+
+  const downloadAudio = async () => {
     const recordingUrl = meetingDetails?.recording_url || meeting?.recording_url
     if (!recordingUrl) return
-    window.open(recordingUrl, "_blank")
+    try {
+      const token = getAuthToken()
+      if (!token) {
+        console.error("No auth token available for recording download")
+        return
+      }
+
+      const response = await fetch(recordingUrl, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        console.error("Failed to download recording:", response.status, response.statusText)
+        return
+      }
+
+      const blob = await response.blob()
+      const blobUrl = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = blobUrl
+      link.download = `${meeting?.meeting_id || "recording"}.wav`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(blobUrl)
+    } catch (error) {
+      console.error("Error downloading recording:", error)
+    }
   }
 
   const downloadTranscript = () => {
@@ -471,7 +500,7 @@ export function MeetingDetailSheet({
                           </motion.div>
                         ) : null}
                       </AnimatePresence>
-                      <motion.div 
+                      <motion.div
                         ref={waveformRef}
                         className="w-full h-full"
                         initial={{ opacity: 0 }}
@@ -523,8 +552,8 @@ export function MeetingDetailSheet({
             {/* METADATA STRIP - Single row, scannable */}
             <div className="px-5 py-3 bg-white border-b border-slate-200 flex items-center gap-3 flex-wrap">
               <span className="text-xs text-slate-500">{formattedDate}</span>
-              <Badge 
-                variant="outline" 
+              <Badge
+                variant="outline"
                 className="bg-slate-100 text-slate-700 border-slate-200"
               >
                 {meeting.inbound ? (
@@ -551,8 +580,8 @@ export function MeetingDetailSheet({
             </div>
 
             {/* TABS - Elevated Design */}
-            <Tabs 
-              defaultValue={defaultTab} 
+            <Tabs
+              defaultValue={defaultTab}
               value={activeTab}
               onValueChange={setActiveTab}
               className="flex-1 flex flex-col"
@@ -561,7 +590,7 @@ export function MeetingDetailSheet({
               <div className="flex items-center justify-between px-5 border-b border-slate-200 bg-white sticky top-0 z-10">
                 <TabsList className="h-11 bg-transparent p-0 gap-1">
                   {hasTranscript && (
-                    <TabsTrigger 
+                    <TabsTrigger
                       value="transcript"
                       className="relative h-11 px-4 rounded-none bg-transparent 
                                  data-[state=active]:bg-transparent
@@ -577,7 +606,7 @@ export function MeetingDetailSheet({
                       Transcript
                     </TabsTrigger>
                   )}
-                  <TabsTrigger 
+                  <TabsTrigger
                     value="details"
                     className="relative h-11 px-4 rounded-none bg-transparent 
                                data-[state=active]:bg-transparent
@@ -593,11 +622,11 @@ export function MeetingDetailSheet({
                     Details
                   </TabsTrigger>
                 </TabsList>
-                
+
                 {/* Contextual Actions - Show based on active tab */}
                 {activeTab === "transcript" && hasTranscript && (
-                  <Button 
-                    variant="ghost" 
+                  <Button
+                    variant="ghost"
                     size="sm"
                     onClick={downloadTranscript}
                     className="h-8 text-slate-600 hover:text-slate-900"
@@ -611,8 +640,8 @@ export function MeetingDetailSheet({
 
               {/* TRANSCRIPT TAB */}
               {hasTranscript && (
-                <TabsContent 
-                  value="transcript" 
+                <TabsContent
+                  value="transcript"
                   className="flex-1 overflow-y-auto m-0 p-0"
                 >
                   {transcriptMessages.length > 0 ? (
@@ -628,15 +657,15 @@ export function MeetingDetailSheet({
                             <div
                               className={`
                                 h-8 w-8 rounded-full flex items-center justify-center flex-shrink-0
-                                ${isUser 
-                                  ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white" 
+                                ${isUser
+                                  ? "bg-gradient-to-br from-blue-500 to-blue-600 text-white"
                                   : "bg-gradient-to-br from-slate-100 to-slate-200 text-slate-600"
                                 }
                               `}
                             >
                               {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
                             </div>
-                            
+
                             {/* Message Bubble */}
                             <div className={`max-w-[75%] flex flex-col ${isUser ? "items-end" : "items-start"}`}>
                               {/* Timestamp - Above bubble */}
@@ -648,13 +677,13 @@ export function MeetingDetailSheet({
                                   {formatTranscriptTimestamp(message.timestamp)}
                                 </span>
                               )}
-                              
+
                               {/* Bubble */}
                               <div
                                 className={`
                                   rounded-2xl px-4 py-2.5 
-                                  ${isUser 
-                                    ? "bg-blue-500 text-white rounded-br-md" 
+                                  ${isUser
+                                    ? "bg-blue-500 text-white rounded-br-md"
                                     : "bg-white text-slate-900 border border-slate-200 rounded-bl-md shadow-sm"
                                   }
                                 `}
@@ -681,15 +710,15 @@ export function MeetingDetailSheet({
               )}
 
               {/* DETAILS TAB */}
-              <TabsContent 
-                value="details" 
+              <TabsContent
+                value="details"
                 className="flex-1 overflow-y-auto m-0"
               >
                 <div className="p-5 space-y-1">
-                  
+
                   {/* Detail Cards - Consistent Pattern */}
                   <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-                    
+
                     {/* Meeting ID Row */}
                     {meeting.meeting_id && (
                       <div className="flex items-center justify-between px-4 py-3 hover:bg-slate-50 transition-colors">
@@ -733,7 +762,7 @@ export function MeetingDetailSheet({
                     )}
 
                     {/* Duration Row (if not shown in player) */}
-                    { meeting.duration && (
+                    {meeting.duration && (
                       <div className="flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
                         <div className="h-9 w-9 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0">
                           <Clock className="h-4 w-4 text-amber-600" />
@@ -745,11 +774,11 @@ export function MeetingDetailSheet({
                       </div>
                     )}
 
-                    
+
 
                   </div>
 
-                 
+
 
                 </div>
               </TabsContent>

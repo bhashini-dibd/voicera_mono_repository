@@ -2,14 +2,12 @@
 # Default models for each LLM provider
 
 LLM_DEFAULT_MODELS = {
-    "openai": "gpt-4o",
-    "kenpath": None,  # Kenpath doesn't need a model parameter
+    "OpenAI": "gpt-4o",
+    "Kenpath": None,  # Kenpath doesn't need a model parameter
     "anthropic": "claude-sonnet-4-5-20250929",
+    "Grok": "grok-3-beta",
     "grok": "grok-3-beta",
     "qwen": "Qwen/Qwen3-8B",
-    "sarvam": "sarvamai/sarvam-30b",
-    # NVIDIA NVCF-hosted Google Gemma model
-    "gemma": "google/gemma-4-26B-A4B-it",
 }
 
 

@@ -3,7 +3,6 @@
 import os
 import socket
 import json
-import time
 import traceback
 import asyncio
 from datetime import datetime, timezone
@@ -15,7 +14,6 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, Request, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import requests
 
@@ -135,23 +133,14 @@ async def make_outbound_call_vobiz(
         "X-Auth-Token": auth_token,
         "Content-Type": "application/json",
     }
-    answer_url = f"{server_url}/answer?agent_id={agent_id}"
     payload = {
         "from": from_number,
         "to": customer_number,
-        "answer_url": answer_url,
+        "answer_url": f"{server_url}/answer?agent_id={agent_id}",
         "answer_method": "POST",
     }
 
-    ws_url = os.environ.get("JOHNAIC_WEBSOCKET_URL", "<not set>")
-    logger.info(
-        "📞 Outbound call: {} → {} agent={} | answer_url={} | websocket_base={}",
-        from_number,
-        customer_number,
-        agent_id,
-        answer_url,
-        ws_url,
-    )
+    logger.info(f"📞 Outbound call: {from_number} → {customer_number} (agent: {agent_id})")
     
     vobiz_api_url = f"{vobiz_api_base_url}/Account/{auth_id}/Call/"
     response = requests.post(vobiz_api_url, json=payload, headers=headers, timeout=30)
@@ -181,79 +170,6 @@ def _build_stream_xml(websocket_url: str) -> str:
 </Response>'''
 
 
-# === HTTP Request / Response Logging Middleware ===
-
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log every HTTP request and its response status + duration.
-
-    WebSocket upgrade requests (/agent/* and /browser/agent/*) are logged
-    at DEBUG level to avoid flooding logs during active calls.  All other
-    HTTP endpoints are logged at INFO level so operator dashboards can
-    easily trace answer-webhook invocations, outbound call triggers, etc.
-    """
-
-    # Paths that belong to live WebSocket call streams — log at DEBUG
-    _WS_PREFIXES = ("/agent/", "/browser/agent/", "/ubona/stream/")
-
-    async def dispatch(self, request: Request, call_next):
-        start = time.perf_counter()
-        method = request.method
-        path = request.url.path
-        query = str(request.url.query)
-        client = (
-            f"{request.client.host}:{request.client.port}"
-            if request.client
-            else "unknown"
-        )
-
-        is_ws_path = any(path.startswith(p) for p in self._WS_PREFIXES)
-        log = logger.debug if is_ws_path else logger.info
-
-        log(
-            "→ {} {} {} client={}{}",
-            method,
-            path,
-            "HTTP/1.1",
-            client,
-            f" query={query}" if query else "",
-        )
-
-        try:
-            response = await call_next(request)
-        except Exception as exc:  # pragma: no cover
-            elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.error(
-                "✗ {} {} — unhandled exception after {:.0f}ms: {}",
-                method,
-                path,
-                elapsed_ms,
-                exc,
-            )
-            raise
-
-        elapsed_ms = (time.perf_counter() - start) * 1000
-        status = response.status_code
-
-        # Choose log level by status code
-        if status >= 500:
-            log_fn = logger.error
-        elif status >= 400:
-            log_fn = logger.warning
-        elif is_ws_path:
-            log_fn = logger.debug
-        else:
-            log_fn = logger.info
-
-        log_fn(
-            "← {} {} {} {:.0f}ms",
-            status,
-            method,
-            path,
-            elapsed_ms,
-        )
-        return response
-
-
 # === FastAPI App ===
 
 app = FastAPI(
@@ -264,8 +180,6 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Attach logging middleware first so it wraps everything (including CORS)
-app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -275,20 +189,6 @@ app.add_middleware(
 )
 app.include_router(telemetry_router)
 app.include_router(create_batch_router(make_outbound_call_vobiz))
-
-
-@app.on_event("startup")
-async def _log_voice_urls_at_startup():
-    """Log URLs at startup so we can verify they are set and public."""
-    server_url = os.environ.get("JOHNAIC_SERVER_URL", "")
-    ws_url = os.environ.get("JOHNAIC_WEBSOCKET_URL", "")
-    logger.info(
-        "📞 Voice server startup: JOHNAIC_SERVER_URL={} JOHNAIC_WEBSOCKET_URL={} (Vobiz must reach these)",
-        server_url or "<not set>",
-        ws_url or "<not set>",
-    )
-    if not ws_url:
-        logger.warning("📞 JOHNAIC_WEBSOCKET_URL not set - WebSocket for call audio will not work")
 
 
 # === Routes ===
@@ -385,37 +285,19 @@ async def vobiz_answer_webhook(request: Request):
     event = form_data_dict.get("Event", "unknown")
     hangup_cause = form_data_dict.get("HangupCause", "USER_BUSY")
 
-    logger.info(
-        "📞 Answer webhook: method={} agent_id={} Event={} HangupCause={} form_keys={}",
-        request.method,
-        agent_id,
-        event,
-        hangup_cause,
-        list(form_data_dict.keys()),
-    )
-
     if event == "StartApp":
         await log_meeting(agent_id, form_data_dict)
         websocket_prefix = os.environ.get("JOHNAIC_WEBSOCKET_URL", "")
         websocket_url = f"{websocket_prefix}/agent/{agent_id}"
-        xml_body = _build_stream_xml(websocket_url)
-        logger.info(
-            "📞 Answer webhook: returning Stream XML | websocket_url={} | Vobiz should connect here for audio",
-            websocket_url,
-        )
-        logger.info(
-            "📞 Answer webhook: XML length={} (contentType=audio/x-mulaw;rate=8000 or L16)",
-            len(xml_body),
-        )
         return Response(
-            content=xml_body,
+            content=_build_stream_xml(websocket_url),
             media_type="application/xml",
         )
     elif event == "Hangup" and hangup_cause == "USER_BUSY":
-        logger.info("📞 Answer webhook: Hangup USER_BUSY - user hung up")
+        logger.info("User hung up the call")
         await log_meeting(agent_id, form_data_dict)
     else:
-        logger.info("📞 Answer webhook: Event={} - no Stream XML returned", event)
+        logger.info("Hang URL Event Sent")
 
 
 @app.websocket("/agent/{agent_id}")
@@ -426,16 +308,8 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
         websocket: WebSocket connection
         agent_id: Agent ID to use
     """
-    # Log immediately when connection attempt is received (before accept)
-    logger.info(
-        "🔌 WebSocket CONNECTION ATTEMPT: /agent/{} - if you see this, Vobiz connected to this pod",
-        agent_id,
-    )
     await websocket.accept()
-    logger.info(
-        "🔌 WebSocket ACCEPTED: agent_id={} - call audio stream started, next: wait for 'start' message",
-        agent_id,
-    )
+    logger.info(f"🔌 WebSocket connected: agent={agent_id}")
 
     call_sid = None
     stream_sid = None
@@ -450,22 +324,12 @@ async def websocket_endpoint(websocket: WebSocket, agent_id: str):
             logger.error(f"❌ Failed to fetch agent config from backend: {agent_id}")
             return
 
-        # Wait for start event with call metadata (Vobiz may send "connected" first)
+        # Wait for start event with call metadata
         first_message = await websocket.receive_text()
         data = json.loads(first_message)
-        logger.info(f"📨 First WebSocket message: {first_message}")
-        first_event = data.get("event", "<no event key>")
-        logger.info(f"📨 First WebSocket message: event={first_event}, keys={list(data.keys())}")
 
-        if first_event == "connected":
-            logger.info("📨 Skipping 'connected' event, waiting for 'start'")
-            first_message = await websocket.receive_text()
-            data = json.loads(first_message)
-            first_event = data.get("event", "<no event key>")
-            logger.info(f"📨 Second WebSocket message: event={first_event}, keys={list(data.keys())}")
-
-        if first_event != "start":
-            logger.warning(f"⚠️ Expected 'start' event, got: {first_event}. Full message keys: {list(data.keys())}")
+        if data.get("event") != "start":
+            logger.warning(f"⚠️ Expected 'start' event, got: {data.get('event')}")
             return
 
         start_info = data.get("start", {})
