@@ -3,6 +3,7 @@
 import os
 import socket
 import json
+import time
 import traceback
 import asyncio
 from datetime import datetime, timezone
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, Request, HTTPException
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel
 import requests
 
@@ -179,6 +181,79 @@ def _build_stream_xml(websocket_url: str) -> str:
 </Response>'''
 
 
+# === HTTP Request / Response Logging Middleware ===
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log every HTTP request and its response status + duration.
+
+    WebSocket upgrade requests (/agent/* and /browser/agent/*) are logged
+    at DEBUG level to avoid flooding logs during active calls.  All other
+    HTTP endpoints are logged at INFO level so operator dashboards can
+    easily trace answer-webhook invocations, outbound call triggers, etc.
+    """
+
+    # Paths that belong to live WebSocket call streams — log at DEBUG
+    _WS_PREFIXES = ("/agent/", "/browser/agent/", "/ubona/stream/")
+
+    async def dispatch(self, request: Request, call_next):
+        start = time.perf_counter()
+        method = request.method
+        path = request.url.path
+        query = str(request.url.query)
+        client = (
+            f"{request.client.host}:{request.client.port}"
+            if request.client
+            else "unknown"
+        )
+
+        is_ws_path = any(path.startswith(p) for p in self._WS_PREFIXES)
+        log = logger.debug if is_ws_path else logger.info
+
+        log(
+            "→ {} {} {} client={}{}",
+            method,
+            path,
+            "HTTP/1.1",
+            client,
+            f" query={query}" if query else "",
+        )
+
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # pragma: no cover
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.error(
+                "✗ {} {} — unhandled exception after {:.0f}ms: {}",
+                method,
+                path,
+                elapsed_ms,
+                exc,
+            )
+            raise
+
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        status = response.status_code
+
+        # Choose log level by status code
+        if status >= 500:
+            log_fn = logger.error
+        elif status >= 400:
+            log_fn = logger.warning
+        elif is_ws_path:
+            log_fn = logger.debug
+        else:
+            log_fn = logger.info
+
+        log_fn(
+            "← {} {} {} {:.0f}ms",
+            status,
+            method,
+            path,
+            elapsed_ms,
+        )
+        return response
+
+
 # === FastAPI App ===
 
 app = FastAPI(
@@ -189,6 +264,8 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# Attach logging middleware first so it wraps everything (including CORS)
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

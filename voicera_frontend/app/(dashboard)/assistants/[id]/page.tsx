@@ -79,6 +79,7 @@ const getProviderOfficialName = (providerId: string): string => {
     playht: "PlayHT",
     groq: "Groq",
     grok: "Grok",
+    gemma: "Gemma",
   }
   return nameMap[providerId] || providerId.charAt(0).toUpperCase() + providerId.slice(1)
 }
@@ -106,6 +107,7 @@ const getProviderIdFromName = (providerName: string): string => {
     "PlayHT": "playht",
     "Groq": "groq",
     "Grok": "grok",
+    "Gemma": "gemma",
   }
   return reverseMap[providerName] || providerName.toLowerCase()
 }
@@ -187,6 +189,12 @@ const llmProviders = {
       "grok-3-beta",
       "grok-2-1212",
       "grok-2-vision-1212",
+    ],
+  },
+  gemma: {
+    name: "Gemma",
+    models: [
+      "google/gemma-4-26B-A4B-it",
     ],
   },
 }

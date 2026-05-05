@@ -8,6 +8,8 @@ LLM_DEFAULT_MODELS = {
     "grok": "grok-3-beta",
     "qwen": "Qwen/Qwen3-8B",
     "sarvam": "sarvamai/sarvam-30b",
+    # NVIDIA NVCF-hosted Google Gemma model
+    "gemma": "google/gemma-4-26B-A4B-it",
 }
 
 

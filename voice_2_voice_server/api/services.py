@@ -27,6 +27,7 @@ from pipecat.services.openai.base_llm import BaseOpenAILLMService
 # Local services
 from services.kenpath_llm.llm import KenpathLLM
 from services.sarvam_llm.llm import SarvamLLM
+from services.gemma_llm.llm import NvidiaGemmaLLM
 from services.ai4bharat.tts import IndicParlerRESTTTSService
 from services.ai4bharat.stt import IndicConformerRESTSTTService
 from services.bhashini.stt import BhashiniSTTService
@@ -223,6 +224,24 @@ def create_llm_service(
         service = SarvamLLM(
             model=get_llm_model("Sarvam", model),
         )
+        service._user_aggregator_params = user_aggregator_params
+        return service
+    elif isinstance(provider_normalized, str) and provider_normalized.lower() == "gemma":
+        api_key = os.getenv("NVIDIA_GEMMA_LLM_API_KEY", "").strip()
+        if not api_key:
+            raise ServiceCreationError(
+                "NVIDIA_GEMMA_LLM_API_KEY is required for the Gemma (NVIDIA NVCF) LLM. "
+                "Set it in your .env file."
+            )
+        resolved_model = get_llm_model("gemma", model)
+        logger.info(
+            "create_llm_service | creating NvidiaGemmaLLM | model={}",
+            resolved_model,
+        )
+        user_aggregator_params = LLMUserAggregatorParams(
+            aggregation_timeout=args.get("aggregation_timeout", 0.05)
+        )
+        service = NvidiaGemmaLLM(model=resolved_model)
         service._user_aggregator_params = user_aggregator_params
         return service
     else:

@@ -71,6 +71,7 @@ const getProviderOfficialName = (providerId: string): string => {
     cartesia: "Cartesia",
     openai: "OpenAI",
     playht: "PlayHT",
+    gemma: "Gemma",
   }
   return nameMap[providerId] || providerId.charAt(0).toUpperCase() + providerId.slice(1)
 }
@@ -136,6 +137,12 @@ const llmProviders = {
       "llama-3.3-70b-versatile",
       "llama-3.1-8b-instant",
       "mixtral-8x7b-32768",
+    ],
+  },
+  gemma: {
+    name: "Gemma",
+    models: [
+      "google/gemma-4-26B-A4B-it",
     ],
   },
 }
@@ -237,13 +244,13 @@ export default function AssistantsPage() {
       try {
         const userData = await getCurrentUser()
         setUser(userData)
-        
+
         // Fetch agents for this org
         if (userData.org_id) {
           const agentsData = await getAgents(userData.org_id)
           setAgents(agentsData)
         }
-        
+
         // Fetch integrations to know which providers have API keys
         try {
           const integrations = await getIntegrations()
@@ -530,7 +537,7 @@ export default function AssistantsPage() {
           if (agent.telephony_provider === "Vobiz") {
             await unlinkVobizNumber(agent.phone_number)
           }
-          
+
           // Detach phone number from agent in database
           const detachResponse = await fetchApiRoute("/api/phone-numbers/detach", {
             method: "DELETE",
@@ -569,7 +576,7 @@ export default function AssistantsPage() {
       // Refresh the agents list after deletion
       const agentsData = await getAgents(user.org_id)
       setAgents(agentsData)
-      
+
       // Show success toast
       setShowDeleteSuccessToast(true)
       setTimeout(() => {
@@ -595,7 +602,7 @@ export default function AssistantsPage() {
         updated.ttsProvider = ""
         updated.ttsModel = ""
         updated.ttsVoice = ""
-        
+
         // Auto-select ai4bharat for languages other than English (United States) and English (India)
         if (newLanguage && newLanguage !== "English (United States)" && newLanguage !== "English (India)") {
           // Check if ai4bharat is available for STT
@@ -604,7 +611,7 @@ export default function AssistantsPage() {
             updated.sttProvider = "ai4bharat"
             updated.sttModel = sttLangData.models.ai4bharat[0] // Use first available model
           }
-          
+
           // Check if ai4bharat is available for TTS
           const ttsLangData = ttsData.tts.languages[newLanguage as keyof typeof ttsData.tts.languages]
           const ttsAi4bharatData = ttsLangData?.models?.ai4bharat as { available?: boolean; model?: string; voices?: string[] } | undefined
@@ -698,13 +705,13 @@ export default function AssistantsPage() {
       // If Vobiz provider, create Vobiz application first
       let vobizAppId: string | undefined
       let vobizAnswerUrl: string | undefined
-      
+
       if (config.telephonyProvider === "Vobiz") {
         vobizAnswerUrl = `${process.env.NEXT_PUBLIC_JOHNAIC_SERVER_URL}/answer?agent_id=${agentId}`
         console.log(" answer url", vobizAnswerUrl)
-        
+
         // // Create Vobiz application
-         const vobizAppResponse = await createVobizApplication(config.name, vobizAnswerUrl)
+        const vobizAppResponse = await createVobizApplication(config.name, vobizAnswerUrl)
         console.log("vobizAppResponse", vobizAppResponse)
         if (vobizAppResponse.status === "success" && vobizAppResponse.app_id) {
           vobizAppId = vobizAppResponse.app_id
@@ -737,7 +744,7 @@ export default function AssistantsPage() {
       // Create agent via API
       const newAgent = await createAgent(agentData)
 
-      
+
       // Refresh agents list to get all agents with proper data
       if (user.org_id) {
         const agentsData = await getAgents(user.org_id)
@@ -746,7 +753,7 @@ export default function AssistantsPage() {
         // Fallback: add new agent to the list
         setAgents([...agents, newAgent])
       }
-      
+
       // Reset and go back to list
       handleBackToList()
     } catch (error) {
@@ -771,7 +778,7 @@ export default function AssistantsPage() {
   const isStepCompleted = (stepId: number) => {
     switch (stepId) {
       case 1:
-        return config.name.length > 0 && config.systemPrompt.length > 0 
+        return config.name.length > 0 && config.systemPrompt.length > 0
       case 2:
         if (config.llmProvider === "kenpath") {
           return !!config.llmProvider
@@ -815,16 +822,16 @@ export default function AssistantsPage() {
 
   // Render list view
   if (view === "list") {
-  return (
-    <div className="flex flex-col h-screen bg-slate-50/50">
-      {/* Header */}
-      <header className="flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-5 lg:px-8 sticky top-0 z-10">
+    return (
+      <div className="flex flex-col h-screen bg-slate-50/50">
+        {/* Header */}
+        <header className="flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-5 lg:px-8 sticky top-0 z-10">
           <nav className="flex items-center gap-1.5 text-sm">
             <span className="text-slate-500">Dashboard</span>
-          <ChevronRight className="h-4 w-4 text-slate-400" />
+            <ChevronRight className="h-4 w-4 text-slate-400" />
             <span className="text-slate-900 font-medium">Agents</span>
-        </nav>
-      </header>
+          </nav>
+        </header>
 
         {/* Main Content */}
         <main className="flex-1 overflow-auto p-6 lg:p-8">
@@ -835,16 +842,16 @@ export default function AssistantsPage() {
               <p className="text-slate-500">Let&apos;s get your agents inline.</p>
             </div>
             <div className="flex items-center gap-3">
-              
+
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <Input
-              type="text"
+                <Input
+                  type="text"
                   placeholder="Search Assistant"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   className="h-10 pl-9 pr-4 w-64 rounded-lg border-slate-200 bg-white focus:border-slate-400 focus:ring-1 focus:ring-slate-200"
-            />
+                />
               </div>
             </div>
           </div>
@@ -885,7 +892,7 @@ export default function AssistantsPage() {
           </div>
         </main>
 
-      
+
 
         {/* Test Call Sheet */}
         <TestCallSheet
@@ -949,34 +956,31 @@ export default function AssistantsPage() {
               const isAccessible = canAccessStep(step.id)
 
               return (
-              <button
+                <button
                   key={step.id}
                   onClick={() => isAccessible && setCreateStep(step.id)}
                   disabled={!isAccessible}
-                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-all duration-150 ${
-                    isActive
+                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-all duration-150 ${isActive
                       ? "bg-slate-100"
                       : isAccessible
-                      ? "hover:bg-slate-50 cursor-pointer"
-                      : "opacity-50 cursor-not-allowed"
-                }`}
-              >
-                <div
-                    className={`h-9 w-9 rounded-lg flex items-center justify-center transition-all duration-150 ${
-                      isActive
-                      ? "bg-slate-900 text-white"
-                        : isCompleted
-                        ? "bg-slate-200 text-slate-600"
-                        : "bg-slate-100 text-slate-400"
-                  }`}
+                        ? "hover:bg-slate-50 cursor-pointer"
+                        : "opacity-50 cursor-not-allowed"
+                    }`}
                 >
+                  <div
+                    className={`h-9 w-9 rounded-lg flex items-center justify-center transition-all duration-150 ${isActive
+                        ? "bg-slate-900 text-white"
+                        : isCompleted
+                          ? "bg-slate-200 text-slate-600"
+                          : "bg-slate-100 text-slate-400"
+                      }`}
+                  >
                     <Icon className="h-4 w-4" />
-                </div>
+                  </div>
                   <div className="flex-1 min-w-0">
                     <p
-                      className={`text-sm font-medium truncate ${
-                        isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
-                      }`}
+                      className={`text-sm font-medium truncate ${isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
+                        }`}
                     >
                       {step.title}
                     </p>
@@ -985,7 +989,7 @@ export default function AssistantsPage() {
                   {isCompleted && (
                     <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                   )}
-              </button>
+                </button>
               )
             })}
           </div>
@@ -1040,7 +1044,7 @@ export default function AssistantsPage() {
                   </div>
                 </div>
 
-                <Button 
+                <Button
                   onClick={handleNextStep}
                   disabled={!canProceed()}
                   className="mt-8 h-11 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium gap-2 disabled:bg-slate-200 disabled:text-slate-400 transition-all"
@@ -1071,7 +1075,7 @@ export default function AssistantsPage() {
                             // Check if provider has integration (API key configured)
                             const isIntegrated = integratedProviders.has(id) || integratedProviders.has(provider.name.toLowerCase())
                             const isAvailable = isBuiltIn || isIntegrated
-                            
+
                             return (
                               <SelectItem key={id} value={id} className="py-3" disabled={!isAvailable}>
                                 <div className="flex items-center gap-2.5">
@@ -1242,7 +1246,7 @@ export default function AssistantsPage() {
                                   const isAvailable = isSupported && isIntegrated
                                   // Determine the reason for unavailability
                                   const unavailableReason = !isSupported ? "not supported" : !isIntegrated ? "not integrated" : ""
-                                  
+
                                   return (
                                     <SelectItem key={provider.id} value={provider.id} disabled={!isAvailable} className="py-2.5">
                                       <span className="flex items-center gap-2">
@@ -1324,7 +1328,7 @@ export default function AssistantsPage() {
                                   const isAvailable = isSupported && isIntegrated
                                   // Determine the reason for unavailability
                                   const unavailableReason = !isSupported ? "not supported" : !isIntegrated ? "not integrated" : ""
-                                  
+
                                   return (
                                     <SelectItem key={provider.id} value={provider.id} disabled={!isAvailable} className="py-2.5">
                                       <span className="flex items-center gap-2">
@@ -1551,8 +1555,8 @@ export default function AssistantsPage() {
                   {/* Telephony Provider Selection */}
                   <div className="space-y-3">
                     <label className="text-base font-bold text-slate-900">Select Telephone Provider</label>
-                    <Select 
-                      value={config.telephonyProvider} 
+                    <Select
+                      value={config.telephonyProvider}
                       onValueChange={(v) => updateConfig("telephonyProvider", v)}
                     >
                       <SelectTrigger className="h-12 rounded-lg border-slate-200 bg-white text-base font-medium hover:bg-slate-50 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all">
@@ -1576,7 +1580,7 @@ export default function AssistantsPage() {
                   </div>
                 </div>
 
-                <Button 
+                <Button
                   onClick={handleNextStep}
                   disabled={!canProceed()}
                   className="mt-8 h-11 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium gap-2 disabled:bg-slate-200 disabled:text-slate-400 transition-all"
@@ -1698,5 +1702,5 @@ export default function AssistantsPage() {
       )}
     </div>
   )
-} 
+}
 
