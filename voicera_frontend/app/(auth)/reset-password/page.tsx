@@ -13,7 +13,7 @@ function ResetPasswordForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const token = searchParams.get("token") || ""
-  
+
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -34,7 +34,7 @@ function ResetPasswordForm() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (formData.password !== formData.confirmPassword) {
       setError("Passwords do not match")
       return
@@ -75,11 +75,15 @@ function ResetPasswordForm() {
         {/* Left Panel - Branding */}
         <div className="hidden lg:flex lg:w-1/2 bg-slate-900 p-12 flex-col justify-between">
           <div>
-            <div className="flex items-center gap-3 mb-16">
-              <img src="/framewisesmall.png" alt="Framewise" className="h-10 w-10" />
-              <span className="text-xl font-semibold text-white">Framewise</span>
+            <div className="mb-16">
+              <img
+                src="/voicera-logo-black-source.png"
+                alt="VoiceRA"
+                className="h-12 w-auto max-w-[220px]"
+                style={{ filter: "brightness(0) invert(1)" }}
+              />
             </div>
-            
+
             <div className="max-w-md">
               <h1 className="text-4xl font-bold text-white mb-4 leading-tight">
                 Build intelligent voice assistants with ease
@@ -89,9 +93,8 @@ function ResetPasswordForm() {
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-8 text-slate-500 text-sm">
-            <span>© 2025 Framewise</span>
             <Link href="#" className="hover:text-slate-300 transition-colors">Privacy</Link>
             <Link href="#" className="hover:text-slate-300 transition-colors">Terms</Link>
           </div>
@@ -102,20 +105,12 @@ function ResetPasswordForm() {
           <div className="w-full max-w-md mx-auto">
             {/* Mobile Logo */}
             <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-              <div className="h-10 w-10 rounded-lg bg-slate-900 flex items-center justify-center">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  className="w-6 h-6 text-white"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" x2="12" y1="19" y2="22" />
-                </svg>
-              </div>
-              <span className="text-xl font-semibold text-slate-900">Framewise</span>
+              <img
+                src="/voicera-logo-black-source.png"
+                alt="VoiceRA"
+                className="h-10 w-auto max-w-[180px]"
+                style={{ filter: "brightness(0) saturate(100%)" }}
+              />
             </div>
 
             <div className="text-center mb-8">
@@ -165,11 +160,15 @@ function ResetPasswordForm() {
         {/* Left Panel - Branding */}
         <div className="hidden lg:flex lg:w-1/2 bg-slate-900 p-12 flex-col justify-between">
           <div>
-            <div className="flex items-center gap-3 mb-16">
-              <img src="/framewisesmall.png" alt="Framewise" className="h-10 w-10" />
-              <span className="text-xl font-semibold text-white">Framewise</span>
+            <div className="mb-16">
+              <img
+                src="/voicera-logo-black-source.png"
+                alt="VoiceRA"
+                className="h-12 w-auto max-w-[220px]"
+                style={{ filter: "brightness(0) invert(1)" }}
+              />
             </div>
-            
+
             <div className="max-w-md">
               <h1 className="text-4xl font-bold text-white mb-4 leading-tight">
                 Build intelligent voice assistants with ease
@@ -179,9 +178,8 @@ function ResetPasswordForm() {
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-8 text-slate-500 text-sm">
-            <span>© 2025 Framewise</span>
             <Link href="#" className="hover:text-slate-300 transition-colors">Privacy</Link>
             <Link href="#" className="hover:text-slate-300 transition-colors">Terms</Link>
           </div>
@@ -192,20 +190,12 @@ function ResetPasswordForm() {
           <div className="w-full max-w-md mx-auto">
             {/* Mobile Logo */}
             <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-              <div className="h-10 w-10 rounded-lg bg-slate-900 flex items-center justify-center">
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  className="w-6 h-6 text-white"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                >
-                  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" x2="12" y1="19" y2="22" />
-                </svg>
-              </div>
-              <span className="text-xl font-semibold text-slate-900">Framewise</span>
+              <img
+                src="/voicera-logo-black-source.png"
+                alt="VoiceRA"
+                className="h-10 w-auto max-w-[180px]"
+                style={{ filter: "brightness(0) saturate(100%)" }}
+              />
             </div>
 
             <div className="text-center mb-8">
@@ -234,11 +224,15 @@ function ResetPasswordForm() {
       {/* Left Panel - Branding */}
       <div className="hidden lg:flex lg:w-1/2 bg-slate-900 p-12 flex-col justify-between">
         <div>
-          <div className="flex items-center gap-3 mb-16">
-            <img src="/framewisesmall.png" alt="Framewise" className="h-10 w-10" />
-            <span className="text-xl font-semibold text-white">Framewise</span>
+          <div className="mb-16">
+            <img
+              src="/voicera-logo-black-source.png"
+              alt="VoiceRA"
+              className="h-12 w-auto max-w-[220px]"
+              style={{ filter: "brightness(0) invert(1)" }}
+            />
           </div>
-          
+
           <div className="max-w-md">
             <h1 className="text-4xl font-bold text-white mb-4 leading-tight">
               Build intelligent voice assistants with ease
@@ -248,9 +242,8 @@ function ResetPasswordForm() {
             </p>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-8 text-slate-500 text-sm">
-          <span>© 2025 Framewise</span>
           <Link href="#" className="hover:text-slate-300 transition-colors">Privacy</Link>
           <Link href="#" className="hover:text-slate-300 transition-colors">Terms</Link>
         </div>
@@ -261,20 +254,12 @@ function ResetPasswordForm() {
         <div className="w-full max-w-md mx-auto">
           {/* Mobile Logo */}
           <div className="lg:hidden flex items-center gap-3 mb-8 justify-center">
-            <div className="h-10 w-10 rounded-lg bg-slate-900 flex items-center justify-center">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                className="w-6 h-6 text-white"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                <line x1="12" x2="12" y1="19" y2="22" />
-              </svg>
-            </div>
-            <span className="text-xl font-semibold text-slate-900">Framewise</span>
+            <img
+              src="/voicera-logo-black-source.png"
+              alt="VoiceRA"
+              className="h-10 w-auto max-w-[180px]"
+              style={{ filter: "brightness(0) saturate(100%)" }}
+            />
           </div>
 
           <div className="mb-8">
@@ -310,15 +295,14 @@ function ResetPasswordForm() {
                   {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
                 </button>
               </div>
-              
+
               {/* Password requirements */}
               <div className="flex flex-wrap gap-3 mt-3">
                 {passwordRequirements.map((req, i) => (
                   <div
                     key={i}
-                    className={`flex items-center gap-1.5 text-xs ${
-                      req.met ? "text-emerald-600" : "text-slate-500"
-                    }`}
+                    className={`flex items-center gap-1.5 text-xs ${req.met ? "text-emerald-600" : "text-slate-500"
+                      }`}
                   >
                     <Check className={`h-3.5 w-3.5 ${req.met ? "opacity-100 text-emerald-600" : "opacity-40 text-slate-400"}`} />
                     {req.text}

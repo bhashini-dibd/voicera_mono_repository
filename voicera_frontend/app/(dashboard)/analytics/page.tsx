@@ -18,31 +18,33 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command"
-import { 
-  Phone, 
-  PhoneCall, 
-  Clock, 
+import {
+  Phone,
+  PhoneCall,
+  Clock,
   BarChart3,
   Loader2,
   TrendingUp,
   Users,
   Calendar as CalendarIcon,
   List,
+  Download,
 } from "lucide-react"
 import { Calendar } from "@/components/ui/calendar"
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
   ResponsiveContainer,
 } from "recharts"
 import { getAnalytics, getAgents, fetchApiRoute, type Analytics, type Agent } from "@/lib/api"
 import { getOrgId } from "@/lib/api"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
+import { downloadAnalyticsPdf } from "@/lib/export-analytics-pdf"
 
 interface PhoneNumber {
   id?: string
@@ -183,9 +185,9 @@ export default function AnalyticsPage() {
     )
   }, [agents, agentSearch])
 
-  const hasActiveFilters = selectedAgent !== "all" || 
-    selectedPhoneNumber !== "all" || 
-    dateRange.from || 
+  const hasActiveFilters = selectedAgent !== "all" ||
+    selectedPhoneNumber !== "all" ||
+    dateRange.from ||
     dateRange.to
 
   const activeFilterCount = useMemo(() => {
@@ -203,15 +205,56 @@ export default function AnalyticsPage() {
     setDateRange({ from: undefined, to: undefined })
   }
 
+  const handleDownloadPdf = () => {
+    if (!analytics) return
+
+    let dateRangeLabel = "All time"
+    if (dateRange.from) {
+      dateRangeLabel = dateRange.to
+        ? `${format(dateRange.from, "MMM d, yyyy")} – ${format(dateRange.to, "MMM d, yyyy")}`
+        : format(dateRange.from, "MMM d, yyyy")
+    }
+
+    const agentLabel =
+      selectedAgent === "all"
+        ? "All agents"
+        : agents.find((a) => a.agent_type === selectedAgent)?.agent_type ?? selectedAgent
+
+    const phoneLabel =
+      selectedPhoneNumber === "all"
+        ? "All numbers"
+        : phoneNumbers.find((p) => p.phone_number === selectedPhoneNumber)?.phone_number ??
+        selectedPhoneNumber
+
+    downloadAnalyticsPdf(analytics, {
+      dateRangeLabel,
+      agentLabel,
+      phoneLabel,
+    })
+  }
+
+  const canDownloadPdf = Boolean(orgId && analytics && !loading && !error)
+
   return (
     <div className="flex flex-col h-screen bg-slate-50">
       {/* Header */}
       <header className="border-b bg-white">
-        <div className="flex h-16 items-center gap-4 px-6">
+        <div className="flex h-16 items-center justify-between gap-4 px-6">
           <div className="flex items-center gap-2">
             <BarChart3 className="h-5 w-5 text-slate-600" />
             <h1 className="text-lg font-semibold text-slate-900">Analytics</h1>
           </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            disabled={!canDownloadPdf}
+            onClick={handleDownloadPdf}
+          >
+            <Download className="h-4 w-4" />
+            Download PDF
+          </Button>
         </div>
       </header>
 
@@ -272,15 +315,15 @@ export default function AnalyticsPage() {
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="gap-2 h-10">
                     <Users className="h-4 w-4" />
-                    {selectedAgent === "all" 
-                      ? "All Agents" 
+                    {selectedAgent === "all"
+                      ? "All Agents"
                       : agents.find(a => a.agent_type === selectedAgent)?.agent_type || "All Agents"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[300px] p-0" align="start">
                   <Command>
-                    <CommandInput 
-                      placeholder="Search agents..." 
+                    <CommandInput
+                      placeholder="Search agents..."
                       value={agentSearch}
                       onValueChange={setAgentSearch}
                     />
@@ -319,15 +362,15 @@ export default function AnalyticsPage() {
                 <PopoverTrigger asChild>
                   <Button variant="outline" className="gap-2 h-10">
                     <Phone className="h-4 w-4" />
-                    {selectedPhoneNumber === "all" 
-                      ? "All Numbers" 
+                    {selectedPhoneNumber === "all"
+                      ? "All Numbers"
                       : phoneNumbers.find(p => p.phone_number === selectedPhoneNumber)?.phone_number || "All Numbers"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[300px] p-0" align="start">
                   <Command>
-                    <CommandInput 
-                      placeholder="Search phone numbers..." 
+                    <CommandInput
+                      placeholder="Search phone numbers..."
                       value={phoneNumberSearch}
                       onValueChange={setPhoneNumberSearch}
                     />
@@ -363,16 +406,16 @@ export default function AnalyticsPage() {
 
               {/* Clear All Button */}
               {hasActiveFilters && (
-                <Button 
-                  variant="ghost" 
-                  onClick={clearFilters} 
+                <Button
+                  variant="ghost"
+                  onClick={clearFilters}
                   className="h-10"
                 >
                   Clear all
                 </Button>
               )}
             </div>
-            
+
             {analytics && (
               <p className="text-sm text-slate-500">
                 Updated {format(new Date(analytics.calculated_at), "PPp")}
@@ -453,19 +496,19 @@ export default function AnalyticsPage() {
                     </div>
                     <p className={cn(
                       "text-xs mt-1 flex items-center gap-1",
-                      Number(connectionRate) >= 70 
-                        ? "text-green-600" 
-                        : Number(connectionRate) >= 50 
-                        ? "text-amber-600" 
-                        : "text-red-600"
+                      Number(connectionRate) >= 70
+                        ? "text-green-600"
+                        : Number(connectionRate) >= 50
+                          ? "text-amber-600"
+                          : "text-red-600"
                     )}>
                       <span className={cn(
                         "h-1.5 w-1.5 rounded-full",
-                        Number(connectionRate) >= 70 
-                          ? "bg-green-500" 
-                          : Number(connectionRate) >= 50 
-                          ? "bg-amber-500" 
-                          : "bg-red-500"
+                        Number(connectionRate) >= 70
+                          ? "bg-green-500"
+                          : Number(connectionRate) >= 50
+                            ? "bg-amber-500"
+                            : "bg-red-500"
                       )} />
                       {connectionRate}% connected
                     </p>
@@ -520,26 +563,26 @@ export default function AnalyticsPage() {
                       <CardDescription>Call distribution by agent</CardDescription>
                     </div>
                     <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
-                      <Button 
-                        variant={agentView === 'chart' ? 'default' : 'ghost'} 
+                      <Button
+                        variant={agentView === 'chart' ? 'default' : 'ghost'}
                         size="sm"
                         className={cn(
                           "h-8 px-3",
-                          agentView === 'chart' 
-                            ? "bg-white text-slate-900" 
+                          agentView === 'chart'
+                            ? "bg-white text-slate-900"
                             : "text-slate-500 hover:text-slate-700"
                         )}
                         onClick={() => setAgentView('chart')}
                       >
                         <BarChart3 className="h-4 w-4" />
                       </Button>
-                      <Button 
-                        variant={agentView === 'list' ? 'default' : 'ghost'} 
+                      <Button
+                        variant={agentView === 'list' ? 'default' : 'ghost'}
                         size="sm"
                         className={cn(
                           "h-8 px-3",
-                          agentView === 'list' 
-                            ? "bg-white text-slate-900" 
+                          agentView === 'list'
+                            ? "bg-white text-slate-900"
                             : "text-slate-500 hover:text-slate-700"
                         )}
                         onClick={() => setAgentView('list')}
@@ -566,7 +609,7 @@ export default function AnalyticsPage() {
                         </span>
                       </div>
                     )}
-                    
+
                     {/* Chart or List View */}
                     {agentView === 'chart' ? (
                       agentChartData.length > 0 ? (
@@ -575,9 +618,9 @@ export default function AnalyticsPage() {
                             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                             <XAxis dataKey="name" tick={{ fontSize: 11 }} angle={-45} textAnchor="end" height={70} />
                             <YAxis tick={{ fontSize: 11 }} />
-                            <Tooltip 
-                              contentStyle={{ 
-                                backgroundColor: "white", 
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: "white",
                                 border: "1px solidrgb(13, 96, 204)",
                                 borderRadius: "8px",
                                 fontSize: "12px"
@@ -610,9 +653,9 @@ export default function AnalyticsPage() {
                                 </span>
                               </div>
                               <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div 
+                                <div
                                   className="h-full rounded-full transition-all duration-500"
-                                  style={{ 
+                                  style={{
                                     width: `${(agent.call_count / analytics.calls_attempted) * 100}%`,
                                     backgroundColor: "#2563eb" // Light blue bar
                                   }}
@@ -644,17 +687,17 @@ export default function AnalyticsPage() {
                       <div className="text-5xl font-bold text-slate-900">{connectionRate}%</div>
                       <p className="text-sm text-slate-500 mt-1">of calls connected</p>
                     </div>
-                    
+
                     {/* Progress bar */}
                     <div className="space-y-2">
                       <div className="h-3 bg-slate-100 rounded-full overflow-hidden">
-                        <div 
+                        <div
                           className="h-full bg-slate-400 rounded-full transition-all duration-500"
                           style={{ width: `${connectionRate}%` }}
                         />
                       </div>
                     </div>
-                    
+
                     {/* Stats row */}
                     <div className="flex items-center justify-center gap-6 pt-4 text-sm">
                       <div className="text-center">

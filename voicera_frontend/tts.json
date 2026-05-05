@@ -351,8 +351,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -462,8 +475,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -541,7 +567,8 @@
         "models": {
           "deepgram": {
             "available": false,
-            "voices": []
+            "voices": [],
+            "note": "Aura-2 integration uses English voice IDs (aura-2-*-en); non-English TTS is not supported via Deepgram in this stack."
           },
           "gcp": {
             "available": true,
@@ -554,8 +581,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -659,8 +699,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -769,8 +822,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -875,8 +941,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -984,8 +1063,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -1089,8 +1181,21 @@
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -1186,12 +1291,31 @@
             "voices": []
           },
           "gcp": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "Chirp3-HD",
+              "Neural2",
+              "WaveNet",
+              "Standard"
+            ],
+            "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "sonic-3",
+              "sonic-multilingual"
+            ],
+            "voices": "use Cartesia voice library"
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -1286,12 +1410,27 @@
             "voices": []
           },
           "gcp": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "Chirp3-HD",
+              "Neural2",
+              "WaveNet",
+              "Standard"
+            ],
+            "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
             "available": false,
             "voices": []
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": true,
@@ -1390,13 +1529,25 @@
           "gcp": {
             "available": true,
             "models": [
-              "Chirp3-HD"
+              "Chirp3-HD",
+              "Neural2",
+              "WaveNet",
+              "Standard"
             ],
             "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
             "available": false,
             "voices": []
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": false,
@@ -1430,12 +1581,27 @@
             "voices": []
           },
           "gcp": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "Chirp3-HD",
+              "Neural2",
+              "WaveNet",
+              "Standard"
+            ],
+            "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
             "available": false,
             "voices": []
+          },
+          "elevenlabs": {
+            "available": true,
+            "models": [
+              "eleven_multilingual_v2",
+              "eleven_turbo_v2_5",
+              "eleven_flash_v2_5"
+            ],
+            "voices": "use ElevenLabs voice library (voice ID from dashboard)"
           },
           "sarvam": {
             "available": false,
@@ -1453,7 +1619,7 @@
           }
         }
       },
-      "Bhili": {
+      "bhb": {
         "models": {
           "deepgram": {
             "available": false,
@@ -1486,7 +1652,7 @@
               "Sanjay",
               "Sunita"
             ],
-            "note": "Using Marathi voice set for Bhili"
+            "note": "Using Marathi voice set for Bhili (bhb)"
           }
         }
       },
@@ -1497,8 +1663,14 @@
             "voices": []
           },
           "gcp": {
-            "available": false,
-            "voices": []
+            "available": true,
+            "models": [
+              "Chirp3-HD",
+              "Neural2",
+              "WaveNet",
+              "Standard"
+            ],
+            "voices": "multiple (use GCP voice list API)"
           },
           "cartesia": {
             "available": false,
@@ -2188,10 +2360,13 @@
         "Odia": [
           "sarvam:bulbul:v3",
           "bhashini:bhashini indic parler",
-          "ai4bharat:indic-parler-tts"
+          "ai4bharat:indic-parler-tts",
+          "gcp:Chirp3-HD"
         ],
         "Assamese": [
           "sarvam:bulbul:v3",
+          "elevenlabs:eleven_multilingual_v2",
+          "gcp:Chirp3-HD",
           "bhashini:bhashini indic parler",
           "ai4bharat:indic-parler-tts"
         ],
@@ -2201,10 +2376,12 @@
           "gcp:Chirp3-HD"
         ],
         "Nepali": [
+          "elevenlabs:eleven_multilingual_v2",
+          "gcp:Chirp3-HD",
           "bhashini:bhashini indic parler",
           "ai4bharat:indic-parler-tts"
         ],
-        "Bhili": [
+        "bhb": [
           "ai4bharat:indic-parler-tts"
         ],
         "Sanskrit": [

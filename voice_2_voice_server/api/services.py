@@ -26,7 +26,6 @@ from pipecat.services.openai.base_llm import BaseOpenAILLMService
 
 # Local services
 from services.kenpath_llm.llm import KenpathLLM
-from services.sarvam_llm.llm import SarvamLLM
 from services.ai4bharat.tts import IndicParlerRESTTTSService
 from services.ai4bharat.stt import IndicConformerRESTSTTService
 from services.bhashini.stt import BhashiniSTTService
@@ -211,20 +210,6 @@ def create_llm_service(
         )
         service._user_aggregator_params = user_aggregator_params
         return service
-    elif isinstance(provider_normalized, str) and provider_normalized.lower() == "sarvam":
-        api_key = os.getenv("SARVAM_LLM_API_KEY", "").strip()
-        if not api_key:
-            raise ServiceCreationError(
-                "SARVAM_LLM_API_KEY is required for Sarvam LLM. Set it in your .env file."
-            )
-        user_aggregator_params = LLMUserAggregatorParams(
-            aggregation_timeout=args.get("aggregation_timeout", 0.05)
-        )
-        service = SarvamLLM(
-            model=get_llm_model("Sarvam", model),
-        )
-        service._user_aggregator_params = user_aggregator_params
-        return service
     else:
         raise ServiceCreationError(f"Unknown LLM provider: {provider}")
 
@@ -282,13 +267,21 @@ def create_stt_service(
             raw_model.replace("-", "_") if isinstance(raw_model, str) and raw_model else raw_model
         )
         lang_code = STT_LANGUAGE_MAP[provider].get(language) if language else None
-        # Pipecat < 0.0.105 uses params=InputParams(language_code=...); >= 0.0.105 uses settings=
+        # Pipecat: Realtime STT expects ISO 639-3 (or 639-1) language_code; Settings field name varies by version.
         try:
             from pipecat.services.elevenlabs.stt import ElevenLabsRealtimeSTTSettings
-            settings = ElevenLabsRealtimeSTTSettings(
-                language=lang_code,
-                **({"model": model} if model else {}),
-            )
+            import inspect
+
+            kwargs_settings = {}
+            if model:
+                kwargs_settings["model"] = model
+            if lang_code is not None:
+                sig = inspect.signature(ElevenLabsRealtimeSTTSettings)
+                if "language_code" in sig.parameters:
+                    kwargs_settings["language_code"] = lang_code
+                elif "language" in sig.parameters:
+                    kwargs_settings["language"] = lang_code
+            settings = ElevenLabsRealtimeSTTSettings(**kwargs_settings)
             return ElevenLabsRealtimeSTTService(
                 api_key=api_key,
                 sample_rate=sample_rate,
@@ -536,9 +529,13 @@ def create_tts_service(
         if model == "indic-parler-tts":
             speaker = tts_config.get("speaker") or args.get("speaker")
             description = tts_config.get("description") or args.get("description")
+            language_id = (
+                TTS_LANGUAGE_MAP[provider].get(language, language) if language else "hi"
+            )
             return IndicParlerRESTTTSService(
                 speaker=speaker,
                 description=description,
+                language_id=language_id,
                 sample_rate=sample_rate
             )
         else:

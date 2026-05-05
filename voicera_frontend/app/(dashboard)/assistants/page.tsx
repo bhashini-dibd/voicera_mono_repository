@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { getCurrentUser, getAgents, createAgent, createVobizApplication, deleteVobizApplication, deleteAgent, unlinkVobizNumber, fetchApiRoute, getIntegrations, type User, type Agent, type CreateAgentRequest, type Integration } from "@/lib/api"
+import { getCurrentUser, getAgents, createAgent, createVobizApplication, deleteVobizApplication, deleteAgent, unlinkVobizNumber, fetchApiRoute, getIntegrations, getKnowledgeDocuments, type User, type Agent, type CreateAgentRequest, type Integration, type KnowledgeDocument } from "@/lib/api"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -29,6 +29,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { TestCallSheet } from "@/components/assistants/test-call-sheet"
+import { TestBrowserDialog } from "@/components/assistants/test-browser-dialog"
 import { AgentCard } from "@/components/assistants/agent-card"
 import { CreateNewAgentCard } from "@/components/assistants/create-new-agent-card"
 import {
@@ -45,11 +46,13 @@ import {
   Languages,
   Mic,
   Loader2,
+  Check,
   X,
 } from "lucide-react"
 
 // Import JSON data
 import sttData from "@/stt.json"
+import { displayLanguageName } from "@/lib/languageLabels"
 import ttsData from "@/tts.json"
 import descriptionsData from "@/descriptions.json"
 
@@ -58,11 +61,13 @@ const getProviderOfficialName = (providerId: string): string => {
   const nameMap: Record<string, string> = {
     assembly: "Assembly",
     azure: "Azure",
+    anthropic: "Anthropic",
     deepgram: "Deepgram",
     elevenlabs: "Elevenlabs",
     gladia: "Gladia",
     google: "Google",
     gcp: "Google", // GCP is officially called Google
+    kenpath: "Kenpath",
     pixa: "Pixa",
     sarvam: "Sarvam",
     smallest: "Smallest",
@@ -70,7 +75,10 @@ const getProviderOfficialName = (providerId: string): string => {
     bhashini: "Bhashini",
     cartesia: "Cartesia",
     openai: "OpenAI",
+    qwen: "Qwen",
     playht: "PlayHT",
+    groq: "Groq",
+    grok: "Grok",
   }
   return nameMap[providerId] || providerId.charAt(0).toUpperCase() + providerId.slice(1)
 }
@@ -102,10 +110,10 @@ const llmProviders = {
       "o1-preview",
     ],
   },
-  sarvam: {
-    name: "Sarvam",
+  qwen: {
+    name: "Qwen",
     models: [
-      "sarvamai/sarvam-30b",
+      "Qwen/Qwen3-8B",
     ],
   },
   kenpath: {
@@ -115,6 +123,8 @@ const llmProviders = {
   anthropic: {
     name: "Anthropic",
     models: [
+      "claude-sonnet-4-5-20250929",
+      "claude-opus-4-6-20250929",
       "claude-sonnet-4-20250514",
       "claude-3-5-sonnet-20241022",
       "claude-3-5-haiku-20241022",
@@ -136,6 +146,14 @@ const llmProviders = {
       "llama-3.3-70b-versatile",
       "llama-3.1-8b-instant",
       "mixtral-8x7b-32768",
+    ],
+  },
+  grok: {
+    name: "Grok",
+    models: [
+      "grok-3-beta",
+      "grok-2-1212",
+      "grok-2-vision-1212",
     ],
   },
 }
@@ -166,6 +184,9 @@ interface AgentConfig {
   systemPrompt: string
   llmProvider: string
   llmModel: string
+  knowledgeEnabled: boolean
+  knowledgeDocumentIds: string[]
+  knowledgeTopK: number
   temperature: number
   maxTokens: number
   language: string
@@ -190,6 +211,9 @@ const defaultConfig: AgentConfig = {
   systemPrompt: "You are a helpful agent. You will help the customer with their queries and doubts. You will never speak more than 2 sentences. Keep your responses concise",
   llmProvider: "openai",
   llmModel: "gpt-4o",
+  knowledgeEnabled: false,
+  knowledgeDocumentIds: [],
+  knowledgeTopK: 3,
   temperature: 0.2,
   maxTokens: 450,
   language: "Hindi",
@@ -227,9 +251,12 @@ export default function AssistantsPage() {
   const [isLoadingAgents, setIsLoadingAgents] = useState(true)
   const [isCreatingAgent, setIsCreatingAgent] = useState(false)
   const [isTestCallSheetOpen, setIsTestCallSheetOpen] = useState(false)
+  const [isTestBrowserDialogOpen, setIsTestBrowserDialogOpen] = useState(false)
   const [selectedAgentForTest, setSelectedAgentForTest] = useState<Agent | null>(null)
   const [showDeleteSuccessToast, setShowDeleteSuccessToast] = useState(false)
   const [integratedProviders, setIntegratedProviders] = useState<Set<string>>(new Set())
+  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([])
+  const [isKnowledgeLoading, setIsKnowledgeLoading] = useState(false)
 
   // Fetch user data, agents, and integrations on mount
   useEffect(() => {
@@ -237,13 +264,13 @@ export default function AssistantsPage() {
       try {
         const userData = await getCurrentUser()
         setUser(userData)
-        
+
         // Fetch agents for this org
         if (userData.org_id) {
           const agentsData = await getAgents(userData.org_id)
           setAgents(agentsData)
         }
-        
+
         // Fetch integrations to know which providers have API keys
         try {
           const integrations = await getIntegrations()
@@ -255,6 +282,16 @@ export default function AssistantsPage() {
           setIntegratedProviders(integrated)
         } catch (intError) {
           console.error("Failed to fetch integrations:", intError)
+        }
+        try {
+          setIsKnowledgeLoading(true)
+          const docs = await getKnowledgeDocuments()
+          setKnowledgeDocs(docs.filter((d) => d.status === "ready"))
+        } catch (kbError) {
+          console.error("Failed to fetch knowledge docs:", kbError)
+          setKnowledgeDocs([])
+        } finally {
+          setIsKnowledgeLoading(false)
         }
       } catch (error) {
         console.error("Failed to fetch data:", error)
@@ -320,7 +357,9 @@ export default function AssistantsPage() {
     const sttLangs = Object.keys(sttData.stt.languages)
     const ttsLangs = Object.keys(ttsData.tts.languages)
     const merged = new Set([...sttLangs, ...ttsLangs])
-    return Array.from(merged).sort().map(name => ({ code: name, name }))
+    return Array.from(merged)
+      .sort()
+      .map((code) => ({ code, name: displayLanguageName(code) }))
   }, [])
 
   // Derive all STT providers from JSON (across all languages)
@@ -508,6 +547,11 @@ export default function AssistantsPage() {
     setIsTestCallSheetOpen(true)
   }
 
+  const handleTestBrowser = (agent: Agent) => {
+    setSelectedAgentForTest(agent)
+    setIsTestBrowserDialogOpen(true)
+  }
+
   const handleViewHistory = (agent: Agent) => {
     if (!agent.agent_type) {
       console.error("Agent type is missing:", agent)
@@ -530,7 +574,7 @@ export default function AssistantsPage() {
           if (agent.telephony_provider === "Vobiz") {
             await unlinkVobizNumber(agent.phone_number)
           }
-          
+
           // Detach phone number from agent in database
           const detachResponse = await fetchApiRoute("/api/phone-numbers/detach", {
             method: "DELETE",
@@ -569,7 +613,7 @@ export default function AssistantsPage() {
       // Refresh the agents list after deletion
       const agentsData = await getAgents(user.org_id)
       setAgents(agentsData)
-      
+
       // Show success toast
       setShowDeleteSuccessToast(true)
       setTimeout(() => {
@@ -595,7 +639,7 @@ export default function AssistantsPage() {
         updated.ttsProvider = ""
         updated.ttsModel = ""
         updated.ttsVoice = ""
-        
+
         // Auto-select ai4bharat for languages other than English (United States) and English (India)
         if (newLanguage && newLanguage !== "English (United States)" && newLanguage !== "English (India)") {
           // Check if ai4bharat is available for STT
@@ -604,7 +648,7 @@ export default function AssistantsPage() {
             updated.sttProvider = "ai4bharat"
             updated.sttModel = sttLangData.models.ai4bharat[0] // Use first available model
           }
-          
+
           // Check if ai4bharat is available for TTS
           const ttsLangData = ttsData.tts.languages[newLanguage as keyof typeof ttsData.tts.languages]
           const ttsAi4bharatData = ttsLangData?.models?.ai4bharat as { available?: boolean; model?: string; voices?: string[] } | undefined
@@ -628,12 +672,33 @@ export default function AssistantsPage() {
       }
       if (key === "llmProvider") {
         updated.llmModel = ""
+        if ((value as string) !== "openai") {
+          updated.knowledgeEnabled = false
+          updated.knowledgeDocumentIds = []
+        }
       }
       return updated
     })
   }
 
   const nameSnakeCase = config.name.toLowerCase().replace(/ /g, "_")
+  const selectedKnowledgeDocs = useMemo(
+    () =>
+      knowledgeDocs.filter((d) => config.knowledgeDocumentIds.includes(d.document_id)),
+    [knowledgeDocs, config.knowledgeDocumentIds]
+  )
+
+  const toggleKnowledgeDocument = (documentId: string) => {
+    setConfig((prev) => {
+      const exists = prev.knowledgeDocumentIds.includes(documentId)
+      return {
+        ...prev,
+        knowledgeDocumentIds: exists
+          ? prev.knowledgeDocumentIds.filter((id) => id !== documentId)
+          : [...prev.knowledgeDocumentIds, documentId],
+      }
+    })
+  }
 
   // Handle save agent
   const handleSaveAgent = async () => {
@@ -698,13 +763,13 @@ export default function AssistantsPage() {
       // If Vobiz provider, create Vobiz application first
       let vobizAppId: string | undefined
       let vobizAnswerUrl: string | undefined
-      
+
       if (config.telephonyProvider === "Vobiz") {
         vobizAnswerUrl = `${process.env.NEXT_PUBLIC_JOHNAIC_SERVER_URL}/answer?agent_id=${agentId}`
         console.log(" answer url", vobizAnswerUrl)
-        
+
         // // Create Vobiz application
-         const vobizAppResponse = await createVobizApplication(config.name, vobizAnswerUrl)
+        const vobizAppResponse = await createVobizApplication(config.name, vobizAnswerUrl)
         console.log("vobizAppResponse", vobizAppResponse)
         if (vobizAppResponse.status === "success" && vobizAppResponse.app_id) {
           vobizAppId = vobizAppResponse.app_id
@@ -723,6 +788,12 @@ export default function AssistantsPage() {
           greeting_message: config.greetingMessage,
           session_timeout_minutes: 10,
           language: languageName,
+          knowledge_base_enabled: config.llmProvider === "openai" ? config.knowledgeEnabled : false,
+          knowledge_document_ids:
+            config.llmProvider === "openai" && config.knowledgeEnabled
+              ? config.knowledgeDocumentIds
+              : [],
+          knowledge_top_k: config.knowledgeTopK,
           llm_model: llmModel,
           stt_model: sttModel,
           tts_model: ttsModel,
@@ -737,7 +808,7 @@ export default function AssistantsPage() {
       // Create agent via API
       const newAgent = await createAgent(agentData)
 
-      
+
       // Refresh agents list to get all agents with proper data
       if (user.org_id) {
         const agentsData = await getAgents(user.org_id)
@@ -746,7 +817,7 @@ export default function AssistantsPage() {
         // Fallback: add new agent to the list
         setAgents([...agents, newAgent])
       }
-      
+
       // Reset and go back to list
       handleBackToList()
     } catch (error) {
@@ -771,7 +842,7 @@ export default function AssistantsPage() {
   const isStepCompleted = (stepId: number) => {
     switch (stepId) {
       case 1:
-        return config.name.length > 0 && config.systemPrompt.length > 0 
+        return config.name.length > 0 && config.systemPrompt.length > 0
       case 2:
         if (config.llmProvider === "kenpath") {
           return !!config.llmProvider
@@ -815,16 +886,16 @@ export default function AssistantsPage() {
 
   // Render list view
   if (view === "list") {
-  return (
-    <div className="flex flex-col h-screen bg-slate-50/50">
-      {/* Header */}
-      <header className="flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-5 lg:px-8 sticky top-0 z-10">
+    return (
+      <div className="flex flex-col h-screen bg-slate-50/50">
+        {/* Header */}
+        <header className="flex h-14 items-center gap-4 border-b border-slate-200 bg-white px-5 lg:px-8 sticky top-0 z-10">
           <nav className="flex items-center gap-1.5 text-sm">
             <span className="text-slate-500">Dashboard</span>
-          <ChevronRight className="h-4 w-4 text-slate-400" />
+            <ChevronRight className="h-4 w-4 text-slate-400" />
             <span className="text-slate-900 font-medium">Agents</span>
-        </nav>
-      </header>
+          </nav>
+        </header>
 
         {/* Main Content */}
         <main className="flex-1 overflow-auto p-6 lg:p-8">
@@ -835,16 +906,16 @@ export default function AssistantsPage() {
               <p className="text-slate-500">Let&apos;s get your agents inline.</p>
             </div>
             <div className="flex items-center gap-3">
-              
+
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <Input
-              type="text"
+                <Input
+                  type="text"
                   placeholder="Search Assistant"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   className="h-10 pl-9 pr-4 w-64 rounded-lg border-slate-200 bg-white focus:border-slate-400 focus:ring-1 focus:ring-slate-200"
-            />
+                />
               </div>
             </div>
           </div>
@@ -878,6 +949,7 @@ export default function AssistantsPage() {
                 getAgentDescription={getAgentDescription}
                 onViewConfig={viewConfig}
                 onTestCall={handleTestCall}
+                onTestBrowser={handleTestBrowser}
                 onViewHistory={handleViewHistory}
                 onDelete={handleDelete}
               />
@@ -885,12 +957,19 @@ export default function AssistantsPage() {
           </div>
         </main>
 
-      
+
 
         {/* Test Call Sheet */}
         <TestCallSheet
           open={isTestCallSheetOpen}
           onOpenChange={setIsTestCallSheetOpen}
+          agent={selectedAgentForTest}
+          getAgentDisplayName={getAgentDisplayName}
+        />
+
+        <TestBrowserDialog
+          open={isTestBrowserDialogOpen}
+          onOpenChange={setIsTestBrowserDialogOpen}
           agent={selectedAgentForTest}
           getAgentDisplayName={getAgentDisplayName}
         />
@@ -936,12 +1015,12 @@ export default function AssistantsPage() {
         </div>
       </header>
 
-      {/* Main Content - Two Column Layout */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Column - Progress Stepper */}
-        <aside className="w-72 bg-white border-r border-slate-100 p-5">
-          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-5">Setup Progress</h3>
-          <div className="space-y-1">
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top Row - Progress Stepper */}
+        <aside className="bg-white border-b border-slate-100 p-3 sm:p-4">
+          <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 text-center">Setup Progress</h3>
+          <div className="flex gap-2 overflow-x-auto pb-1 justify-center">
             {wizardSteps.map((step) => {
               const Icon = step.icon
               const isActive = createStep === step.id
@@ -949,51 +1028,48 @@ export default function AssistantsPage() {
               const isAccessible = canAccessStep(step.id)
 
               return (
-              <button
+                <button
                   key={step.id}
                   onClick={() => isAccessible && setCreateStep(step.id)}
                   disabled={!isAccessible}
-                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-lg text-left transition-all duration-150 ${
-                    isActive
+                  className={`shrink-0 min-w-[140px] sm:min-w-[160px] flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-all duration-150 ${isActive
                       ? "bg-slate-100"
                       : isAccessible
-                      ? "hover:bg-slate-50 cursor-pointer"
-                      : "opacity-50 cursor-not-allowed"
-                }`}
-              >
-                <div
-                    className={`h-9 w-9 rounded-lg flex items-center justify-center transition-all duration-150 ${
-                      isActive
-                      ? "bg-slate-900 text-white"
-                        : isCompleted
-                        ? "bg-slate-200 text-slate-600"
-                        : "bg-slate-100 text-slate-400"
-                  }`}
+                        ? "hover:bg-slate-50 cursor-pointer"
+                        : "opacity-50 cursor-not-allowed"
+                    }`}
                 >
+                  <div
+                    className={`h-8 w-8 rounded-md flex items-center justify-center transition-all duration-150 shrink-0 ${isActive
+                        ? "bg-slate-900 text-white"
+                        : isCompleted
+                          ? "bg-slate-200 text-slate-600"
+                          : "bg-slate-100 text-slate-400"
+                      }`}
+                  >
                     <Icon className="h-4 w-4" />
-                </div>
+                  </div>
                   <div className="flex-1 min-w-0">
                     <p
-                      className={`text-sm font-medium truncate ${
-                        isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
-                      }`}
+                      className={`text-sm font-medium leading-tight truncate ${isActive ? "text-slate-900" : isCompleted ? "text-slate-700" : "text-slate-500"
+                        }`}
                     >
                       {step.title}
                     </p>
-                    <p className="text-xs text-slate-400 truncate">{step.subtitle}</p>
+                    <p className="text-[11px] text-slate-400 truncate">{step.subtitle}</p>
                   </div>
                   {isCompleted && (
                     <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                   )}
-              </button>
+                </button>
               )
             })}
           </div>
         </aside>
 
-        {/* Right Column - Step Content */}
-        <main className="flex-1 overflow-auto p-8">
-          <div className="max-w-4xl">
+        {/* Step Content */}
+        <main className="flex-1 overflow-auto p-6 sm:p-8">
+          <div className="w-full max-w-4xl mx-auto">
             {/* Step 1: Agent Creation */}
             {createStep === 1 && (
               <div className="bg-white rounded-xl border border-slate-200 p-8">
@@ -1040,7 +1116,7 @@ export default function AssistantsPage() {
                   </div>
                 </div>
 
-                <Button 
+                <Button
                   onClick={handleNextStep}
                   disabled={!canProceed()}
                   className="mt-8 h-11 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium gap-2 disabled:bg-slate-200 disabled:text-slate-400 transition-all"
@@ -1066,12 +1142,12 @@ export default function AssistantsPage() {
                         </SelectTrigger>
                         <SelectContent className="rounded-lg">
                           {Object.entries(llmProviders).map(([id, provider]) => {
-                            // OpenAI, Sarvam, and Kenpath are always available (env-based / built-in)
-                            const isBuiltIn = id === "openai" || id === "sarvam" || id === "kenpath"
+                            // OpenAI, Qwen, and Kenpath are always available (built-in)
+                            const isBuiltIn = id === "openai" || id === "qwen" || id === "kenpath"
                             // Check if provider has integration (API key configured)
                             const isIntegrated = integratedProviders.has(id) || integratedProviders.has(provider.name.toLowerCase())
                             const isAvailable = isBuiltIn || isIntegrated
-                            
+
                             return (
                               <SelectItem key={id} value={id} className="py-3" disabled={!isAvailable}>
                                 <div className="flex items-center gap-2.5">
@@ -1141,6 +1217,91 @@ export default function AssistantsPage() {
                     </div>
                   )}
 
+                  {config.llmProvider === "openai" && (
+                    <div className="space-y-4 pt-4 border-t border-slate-100">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-base font-bold text-slate-900">Knowledge Base</p>
+                          <p className="text-sm text-slate-500">
+                            Enable retrieval from selected knowledge documents.
+                          </p>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="sr-only peer"
+                            checked={config.knowledgeEnabled}
+                            onChange={() =>
+                              updateConfig(
+                                "knowledgeEnabled",
+                                !config.knowledgeEnabled
+                              )
+                            }
+                          />
+                          <div
+                            className="w-11 h-6 bg-slate-200 dark:bg-slate-800 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-blue-500 rounded-full peer-checked:bg-emerald-600 transition-colors"
+                          />
+                          <div
+                            className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-5"
+                          />
+                        </label>
+                      </div>
+                      {config.knowledgeEnabled && (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <label className="text-sm font-semibold text-slate-700">
+                              Select knowledge documents
+                            </label>
+                            <span className="text-xs text-slate-500">
+                              {selectedKnowledgeDocs.length} selected
+                            </span>
+                          </div>
+                          {isKnowledgeLoading ? (
+                            <div className="flex items-center gap-2 text-sm text-slate-500">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Loading knowledge documents...
+                            </div>
+                          ) : knowledgeDocs.length === 0 ? (
+                            <p className="text-sm text-slate-500">
+                              No ready knowledge documents found. Upload and process files in Knowledge Base.
+                            </p>
+                          ) : (
+                            <div className="max-h-44 overflow-auto rounded-lg border border-slate-200 bg-slate-50 divide-y divide-slate-200">
+                              {knowledgeDocs.map((doc) => {
+                                const checked = config.knowledgeDocumentIds.includes(doc.document_id)
+                                return (
+                                  <button
+                                    key={doc.document_id}
+                                    type="button"
+                                    onClick={() => toggleKnowledgeDocument(doc.document_id)}
+                                    className="w-full px-3 py-2 text-left hover:bg-slate-100 transition flex items-center gap-3"
+                                  >
+                                    <span
+                                      aria-hidden
+                                      className={[
+                                        "h-4 w-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                                        checked
+                                          ? "bg-emerald-600 border-emerald-600"
+                                          : "bg-white border-slate-300",
+                                      ].join(" ")}
+                                    >
+                                      {checked && (
+                                        <Check className="h-3 w-3 text-white" />
+                                      )}
+                                    </span>
+                                    <span className="text-sm text-slate-800 truncate">
+                                      {doc.original_filename}
+                                    </span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {config.llmProvider && availableLLMModels.length === 0 && (
                     <div className="rounded-lg bg-slate-50 border border-slate-200 p-4">
                       <p className="text-slate-600 text-sm">
@@ -1178,7 +1339,9 @@ export default function AssistantsPage() {
                         >
                           <div className="flex items-center gap-2">
                             <Languages className="h-4 w-4 text-blue-500" />
-                            {config.language || "Select language..."}
+                            {config.language
+                              ? displayLanguageName(config.language)
+                              : "Select language..."}
                           </div>
                         </Button>
                       </PopoverTrigger>
@@ -1191,9 +1354,9 @@ export default function AssistantsPage() {
                               {allLanguages.map((lang) => (
                                 <CommandItem
                                   key={lang.code}
-                                  value={lang.name}
+                                  value={`${lang.code} ${lang.name}`}
                                   onSelect={() => {
-                                    updateConfig("language", lang.name)
+                                    updateConfig("language", lang.code)
                                     setLanguageOpen(false)
                                   }}
                                   className="py-2.5"
@@ -1242,7 +1405,7 @@ export default function AssistantsPage() {
                                   const isAvailable = isSupported && isIntegrated
                                   // Determine the reason for unavailability
                                   const unavailableReason = !isSupported ? "not supported" : !isIntegrated ? "not integrated" : ""
-                                  
+
                                   return (
                                     <SelectItem key={provider.id} value={provider.id} disabled={!isAvailable} className="py-2.5">
                                       <span className="flex items-center gap-2">
@@ -1324,7 +1487,7 @@ export default function AssistantsPage() {
                                   const isAvailable = isSupported && isIntegrated
                                   // Determine the reason for unavailability
                                   const unavailableReason = !isSupported ? "not supported" : !isIntegrated ? "not integrated" : ""
-                                  
+
                                   return (
                                     <SelectItem key={provider.id} value={provider.id} disabled={!isAvailable} className="py-2.5">
                                       <span className="flex items-center gap-2">
@@ -1551,8 +1714,8 @@ export default function AssistantsPage() {
                   {/* Telephony Provider Selection */}
                   <div className="space-y-3">
                     <label className="text-base font-bold text-slate-900">Select Telephone Provider</label>
-                    <Select 
-                      value={config.telephonyProvider} 
+                    <Select
+                      value={config.telephonyProvider}
                       onValueChange={(v) => updateConfig("telephonyProvider", v)}
                     >
                       <SelectTrigger className="h-12 rounded-lg border-slate-200 bg-white text-base font-medium hover:bg-slate-50 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition-all">
@@ -1576,7 +1739,7 @@ export default function AssistantsPage() {
                   </div>
                 </div>
 
-                <Button 
+                <Button
                   onClick={handleNextStep}
                   disabled={!canProceed()}
                   className="mt-8 h-11 px-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium gap-2 disabled:bg-slate-200 disabled:text-slate-400 transition-all"
@@ -1625,6 +1788,14 @@ export default function AssistantsPage() {
                           Tokens: {config.maxTokens} • Temperature: {config.temperature.toFixed(1)}
                         </p>
                       )}
+                      {config.llmProvider === "openai" && (
+                        <p className="text-sm text-slate-500 mt-1">
+                          Knowledge Base:{" "}
+                          {config.knowledgeEnabled
+                            ? `${selectedKnowledgeDocs.length} document(s) selected`
+                            : "Disabled"}
+                        </p>
+                      )}
                     </div>
                     <button onClick={() => setCreateStep(2)} className="text-sm font-semibold text-blue-600 hover:text-blue-700 transition-colors">
                       Edit
@@ -1636,7 +1807,7 @@ export default function AssistantsPage() {
                     <div>
                       <p className="text-sm font-bold text-slate-900 mb-2">Audio Configuration</p>
                       <p className="text-sm font-medium text-slate-700">
-                        {config.language || "—"}
+                        {config.language ? displayLanguageName(config.language) : "—"}
                       </p>
                       <p className="text-sm text-slate-500 mt-1">
                         <span className="font-medium">STT:</span> {getProviderOfficialName(config.sttProvider) || "—"} / {config.sttModel || "—"}
@@ -1699,4 +1870,3 @@ export default function AssistantsPage() {
     </div>
   )
 } 
-
