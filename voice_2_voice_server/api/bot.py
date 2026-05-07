@@ -4,7 +4,6 @@ import os
 import json
 import time
 import traceback
-from datetime import datetime
 
 from loguru import logger
 from dotenv import load_dotenv
@@ -26,6 +25,8 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketParams,
     FastAPIWebsocketTransport,
 )
+from pipecat.serializers.plivo import PlivoFrameSerializer
+from pipecat.runner.utils import parse_telephony_websocket
 from storage.minio_client import MinIOStorage
 from serializer.vobiz_serializer import VobizFrameSerializer
 from serializer.ubona_serializer import UbonaFrameSerializer
@@ -37,6 +38,7 @@ from .services import (
 )
 # Import the new filter
 from services.audio.greeting_interruption_filter import GreetingInterruptionFilter
+from services.audio.marathi_idle_prompt_filter import MarathiIdlePromptFilter
 from services.vllm_qwen import ensure_no_think_suffix
 from .call_recording_utils import submit_call_recording
 
@@ -202,8 +204,19 @@ async def run_bot(
             context_aggregator = llm.create_context_aggregator(context)
         
         greeting_filter = GreetingInterruptionFilter()
-        
-        pipeline = Pipeline([
+        language_normalized = str(language or "").strip().lower()
+        marathi_idle_prompt_enabled = (
+            language_normalized == "marathi"
+            or language_normalized == "mr"
+            or language_normalized.startswith("mr-")
+        )
+        marathi_idle_prompt_filter = (
+            MarathiIdlePromptFilter(timeout_secs=10.0) if marathi_idle_prompt_enabled else None
+        )
+        if marathi_idle_prompt_enabled:
+            logger.info("Marathi idle prompt enabled (10s silence after bot speech)")
+
+        pipeline_processors = [
             transport.input(),
             greeting_filter,
             stt,
@@ -211,11 +224,17 @@ async def run_bot(
             context_aggregator.user(),
             llm,
             tts,
+        ]
+        if marathi_idle_prompt_filter:
+            pipeline_processors.append(marathi_idle_prompt_filter)
+        pipeline_processors.extend([
             transcript.assistant(),
             audiobuffer,
             transport.output(),
             context_aggregator.assistant(),
         ])
+
+        pipeline = Pipeline(pipeline_processors)
         
         task = PipelineTask(
             pipeline,
@@ -255,12 +274,13 @@ async def run_bot(
 
 async def bot(
     websocket_client,
-    stream_sid: str,
-    call_sid: str,
+    stream_sid: Optional[str],
+    call_sid: Optional[str],
     agent_type: str,
     agent_config: dict,
+    provider: str = "vobiz",
     transcript_callback: Optional[Callable[[str, str, Optional[str]], Awaitable[None]]] = None,
-) -> None:
+) -> str:
     """Main bot entry point - sets up transport and runs the pipeline."""
     sample_rate = _get_sample_rate()
     session_timeout = agent_config.get("session_timeout_minutes", 10) * 60
@@ -276,27 +296,55 @@ async def bot(
     
     # Track call start time
     call_start_time = time.monotonic()
-    start_time_utc = datetime.utcnow().isoformat()
     
     # Initialize MinIO storage
     storage = MinIOStorage.from_env()
-    
-    serializer = VobizFrameSerializer(
-        stream_sid=stream_sid,
-        call_sid=call_sid,
-        params=VobizFrameSerializer.InputParams(
-            vobiz_sample_rate=sample_rate,
-            sample_rate=sample_rate
+
+    normalized_provider = (provider or "vobiz").strip().lower()
+    if normalized_provider == "plivo":
+        await websocket_client.accept()
+        _, telephony_call_data = await parse_telephony_websocket(websocket_client)
+        stream_sid = (
+            stream_sid
+            or telephony_call_data.get("stream_id")
+            or telephony_call_data.get("streamId")
+            or "unknown"
         )
-    )
+        call_sid = (
+            call_sid
+            or telephony_call_data.get("call_id")
+            or telephony_call_data.get("callId")
+            or "unknown"
+        )
+        serializer = PlivoFrameSerializer(
+            stream_id=stream_sid,
+            call_id=call_sid,
+            params=PlivoFrameSerializer.InputParams(
+                plivo_sample_rate=sample_rate,
+                sample_rate=sample_rate,
+                auto_hang_up=False,
+            ),
+        )
+    else:
+        stream_sid = stream_sid or "unknown"
+        call_sid = call_sid or "unknown"
+        serializer = VobizFrameSerializer(
+            stream_sid=stream_sid,
+            call_sid=call_sid,
+            params=VobizFrameSerializer.InputParams(
+                vobiz_sample_rate=sample_rate,
+                sample_rate=sample_rate
+            )
+        )
+    
     
     vad_analyzer = SileroVADAnalyzer(
         sample_rate=sample_rate,
         params=VADParams(
-            stop_secs=0.35,
-            min_volume=0.3,
+            stop_secs=0.3,
+            min_volume=0.6,
             confidence=0.4,
-            start_secs=0.1,
+            start_secs=0.3,
         )
     )
     vad_analyzer._smoothing_factor = 0.1  # Faster volume change response
@@ -398,6 +446,7 @@ async def bot(
             storage=storage,
             call_start_time=call_start_time
         )
+    return call_sid
 
 async def ubona_bot(
     websocket_client,
