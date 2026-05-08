@@ -1,6 +1,7 @@
 """Bhashini Socket.IO STT Service for Pipecat"""
 
 import asyncio
+import audioop
 import os
 import traceback
 from typing import AsyncGenerator, Optional
@@ -50,12 +51,16 @@ class BhashiniSTTService(STTService):
         self._service_id = service_id
         self._language = language
         self._response_frequency_secs = response_frequency_secs
+        self._speech_rms_threshold = int(os.getenv("BHASHINI_SPEECH_RMS_THRESHOLD", "120"))
+        self._silence_rms_threshold = int(os.getenv("BHASHINI_SILENCE_RMS_THRESHOLD", "30"))
+        self._min_transcript_chars = int(os.getenv("BHASHINI_MIN_TRANSCRIPT_CHARS", "2"))
 
         self._sio: Optional[socketio.AsyncClient] = None
 
         self._is_connected = False
         self._is_ready = False
         self._is_speaking = False
+        self._energy_gate_active = False
         self._ready_event: Optional[asyncio.Event] = None
 
         logger.info(
@@ -286,6 +291,13 @@ class BhashiniSTTService(STTService):
                 return
 
             if is_interim:
+                if len(transcript.strip()) < self._min_transcript_chars:
+                    logger.debug(
+                        "STT [RESPONSE] INTERIM transcript below minimum length ({} < {}) - skipping",
+                        len(transcript.strip()),
+                        self._min_transcript_chars,
+                    )
+                    return
                 logger.debug("STT [RESPONSE] INTERIM transcript: '{}'", transcript)
                 await self.push_frame(InterimTranscriptionFrame(
                     text=transcript,
@@ -293,6 +305,13 @@ class BhashiniSTTService(STTService):
                     timestamp=time_now_iso8601(),
                 ))
             else:
+                if len(transcript.strip()) < self._min_transcript_chars:
+                    logger.debug(
+                        "STT [RESPONSE] FINAL transcript below minimum length ({} < {}) - skipping",
+                        len(transcript.strip()),
+                        self._min_transcript_chars,
+                    )
+                    return
                 logger.info("STT [RESPONSE] ✅ FINAL transcript: '{}'", transcript)
                 await self.push_frame(TranscriptionFrame(
                     text=transcript,
@@ -311,6 +330,25 @@ class BhashiniSTTService(STTService):
             return
         if not audio:
             logger.debug("STT [AUDIO] Empty audio chunk received — skipping")
+            yield None
+            return
+
+        try:
+            rms = audioop.rms(audio, 2)
+        except Exception:
+            rms = 0
+
+        if rms >= self._speech_rms_threshold:
+            self._energy_gate_active = True
+        elif rms <= self._silence_rms_threshold:
+            self._energy_gate_active = False
+
+        if not self._energy_gate_active and not self._is_speaking:
+            logger.debug(
+                "STT [AUDIO] Dropping low-energy chunk ({} bytes, rms={})",
+                len(audio),
+                rms,
+            )
             yield None
             return
 
@@ -344,10 +382,12 @@ class BhashiniSTTService(STTService):
         if isinstance(frame, UserStartedSpeakingFrame):
             logger.info("STT [VAD] User started speaking (is_ready={})", self._is_ready)
             self._is_speaking = True
+            self._energy_gate_active = True
 
         elif isinstance(frame, UserStoppedSpeakingFrame):
             logger.info("STT [VAD] User stopped speaking — sending finalize signal (is_ready={})", self._is_ready)
             self._is_speaking = False
+            self._energy_gate_active = False
             if self._sio and self._is_ready:
                 try:
                     await self._sio.emit("data", (None, None, True, False))

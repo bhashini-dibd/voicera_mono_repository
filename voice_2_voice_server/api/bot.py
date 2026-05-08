@@ -159,6 +159,7 @@ async def run_bot(
         llm_config = dict(agent_config.get("llm_model", {}) or {})
         stt_config = agent_config.get("stt_model", {})
         tts_config = agent_config.get("tts_model", {})
+        stt_provider_name = str(stt_config.get("name") or "").strip().lower()
         llm_provider_name = str(llm_config.get("name") or "").strip().lower()
         if llm_provider_name == "openai":
             llm_config["knowledge_base_enabled"] = bool(
@@ -177,7 +178,24 @@ async def run_bot(
                 tts_config["language"] = language
 
         org_id = agent_config.get("org_id")
-     
+        is_bhashini_stt = stt_provider_name == "bhashini"
+        min_transcript_chars = 2 if is_bhashini_stt else 1
+        bot_vad_stop_secs = 0.35 if is_bhashini_stt else 0.2
+
+        if is_bhashini_stt:
+            vad_analyzer = SileroVADAnalyzer(
+                sample_rate=sample_rate,
+                params=VADParams(
+                    stop_secs=0.45,
+                    min_volume=0.75,
+                    confidence=0.55,
+                    start_secs=0.25,
+                ),
+            )
+            vad_analyzer._smoothing_factor = 0.08
+            import pipecat.transports.base_output
+            pipecat.transports.base_output.BOT_VAD_STOP_SECS = bot_vad_stop_secs
+
         llm = create_llm_service(
             llm_config,
             vistaar_session_id=vistaar_session_id,
@@ -352,7 +370,10 @@ async def bot(
     pipecat.transports.base_input.AUDIO_INPUT_TIMEOUT_SECS = 0.1
 
     import pipecat.transports.base_output
-    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.2
+    stt_config = agent_config if isinstance(agent_config, dict) else {}
+    stt_provider_name = str((stt_config.get("stt") or {}).get("name") or "").strip().lower()
+    min_transcript_chars = 2 if stt_provider_name == "bhashini" else 1
+    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.35 if stt_provider_name == "bhashini" else 0.2
     
     transport = FastAPIWebsocketTransport(
         websocket=websocket_client,
@@ -401,13 +422,21 @@ async def bot(
     async def on_transcript_update(processor, frame):
         # Accumulate transcript lines in memory (no I/O during call)
         for message in frame.messages:
+            content = (message.content or "").strip()
+            if not content or len(content) < min_transcript_chars:
+                logger.debug(
+                    "Skipping short transcript fragment (role={}, len={})",
+                    message.role,
+                    len(content),
+                )
+                continue
             timestamp = f"[{message.timestamp}] " if message.timestamp else ""
-            line = f"{timestamp}{message.role}: {message.content}"
+            line = f"{timestamp}{message.role}: {content}"
             logger.info(f"Transcript: {line}")
             call_data["transcript_lines"].append(line)
-            if transcript_callback and message.content:
+            if transcript_callback:
                 try:
-                    await transcript_callback(message.role, message.content, message.timestamp)
+                    await transcript_callback(message.role, content, message.timestamp)
                 except Exception as callback_error:
                     logger.debug(f"Transcript callback failed: {callback_error}")
     

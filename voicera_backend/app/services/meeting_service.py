@@ -288,6 +288,41 @@ def parse_transcript(transcript_content: str) -> List[Dict[str, Any]]:
     return messages
 
 
+def parse_llm_responses(transcript_content: str, agent_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """
+    Extract assistant-only turns from a transcript.
+
+    Used as backward compatibility for older call logs that do not yet store
+    the dedicated llm_responses field.
+    """
+    if not transcript_content:
+        return []
+
+    responses: List[Dict[str, Any]] = []
+    provider_name = None
+    model_name = None
+    if agent_config:
+        llm_model = agent_config.get("llm_model", {}) or {}
+        provider_name = llm_model.get("name")
+        model_name = llm_model.get("model")
+
+    for message in parse_transcript(transcript_content):
+        if message.get("role") == "agent":
+            response: Dict[str, Any] = {
+                "role": "assistant",
+                "content": message.get("content", ""),
+            }
+            if message.get("timestamp"):
+                response["timestamp"] = message["timestamp"]
+            if provider_name:
+                response["provider"] = provider_name
+            if model_name:
+                response["model"] = model_name
+            responses.append(response)
+
+    return responses
+
+
 def transform_recording_url(recording_url: str, meeting_id: str, base_url: str = "/api/v1") -> str:
     """
     Transform minio:// URLs to proxy endpoint URLs.
@@ -349,9 +384,12 @@ def transform_meeting_for_frontend(meeting: Dict[str, Any], base_url: str = None
     transcript_content = result.get('transcript_content')
     if transcript_content:
         result['transcript'] = parse_transcript(transcript_content)
+        if not result.get("llm_responses"):
+            result["llm_responses"] = parse_llm_responses(transcript_content, result.get("agent_config") or {})
     else:
         result['transcript'] = []
-    
+        result.setdefault("llm_responses", [])
+
     return result
 
 

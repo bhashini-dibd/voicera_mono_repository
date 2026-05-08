@@ -49,6 +49,7 @@ function HistoryPageContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [currentPage, setCurrentPage] = useState(1)
   const [itemsPerPage] = useState(100)
+  const [historyView, setHistoryView] = useState<"calls" | "llm-responses">("calls")
 
   // Sheet state
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null)
@@ -259,10 +260,75 @@ function HistoryPageContent() {
     return filteredMeetings.slice(start, end)
   }, [filteredMeetings, currentPage, itemsPerPage])
 
+  const getLLMResponsesForMeeting = (meeting: Meeting) => {
+    if (Array.isArray(meeting.llm_responses) && meeting.llm_responses.length > 0) {
+      return meeting.llm_responses
+    }
+
+    if (Array.isArray(meeting.transcript) && meeting.transcript.length > 0) {
+      return meeting.transcript
+        .filter((message) => message.role !== "user" && message.content.trim().length > 0)
+        .map((message) => ({
+          role: "assistant" as const,
+          content: message.content,
+          timestamp: message.timestamp,
+        }))
+    }
+
+    if (meeting.transcript_content) {
+      return meeting.transcript_content
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .flatMap((line) => {
+          const match = line.match(/^\[([^\]]+)\]\s*(assistant|agent|bot):\s*(.+)$/i)
+          if (match) {
+            return [{
+              role: "assistant" as const,
+              content: match[3].trim(),
+              timestamp: match[1].trim(),
+            }]
+          }
+          const fallbackMatch = line.match(/^(assistant|agent|bot):\s*(.+)$/i)
+          if (fallbackMatch) {
+            return [{
+              role: "assistant" as const,
+              content: fallbackMatch[2].trim(),
+            }]
+          }
+          return []
+        })
+    }
+
+    return []
+  }
+
+  const llmResponseRows = useMemo(() => {
+    return filteredMeetings.flatMap((meeting) =>
+      getLLMResponsesForMeeting(meeting).map((response, index) => ({
+        meeting,
+        response,
+        responseIndex: index,
+      }))
+    )
+  }, [filteredMeetings])
+
+  const paginatedLLMResponses = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage
+    const end = start + itemsPerPage
+    return llmResponseRows.slice(start, end)
+  }, [llmResponseRows, currentPage, itemsPerPage])
+
+  const totalHistoryRows = historyView === "calls" ? filteredMeetings.length : llmResponseRows.length
+
   // Reset to page 1 when filters or date range change
   useEffect(() => {
     setCurrentPage(1)
   }, [activeFilters, dateRange])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [historyView])
 
   // Filter helper functions
   const filterOptions = [
@@ -404,6 +470,8 @@ function HistoryPageContent() {
           ? "Completed"
           : "In Progress",
       "Call Duration": meeting.call_busy ? "N/A" : formatDuration(meeting.duration, meeting.start_time_utc, meeting.end_time_utc),
+      "LLM Response Count": getLLMResponsesForMeeting(meeting).length,
+      "Latest LLM Response": getLLMResponsesForMeeting(meeting).slice(-1)[0]?.content || "-",
     }))
   }
 
@@ -505,6 +573,18 @@ function HistoryPageContent() {
     return ""
   }
 
+  const buildLLMResponsesText = (meeting: Meeting) => {
+    const responses = getLLMResponsesForMeeting(meeting)
+    if (responses.length === 0) return ""
+    return responses
+      .map((response, index) => {
+        const timestamp = response.timestamp ? `[${response.timestamp}] ` : ""
+        return `${timestamp}assistant ${index + 1}: ${response.content}`
+      })
+      .join("\n")
+      .trim()
+  }
+
   const prepareTranscriptExportData = (meetingsToExport: Meeting[]) => {
     return meetingsToExport
       .map((meeting) => {
@@ -517,9 +597,10 @@ function HistoryPageContent() {
           "Call Type": meeting.inbound ? "Inbound" : "Outbound",
           "Called On": formatDate(meeting.start_time_utc || meeting.created_at),
           Transcript: transcriptText,
+          "LLM Responses": buildLLMResponsesText(meeting),
         }
       })
-      .filter((row) => row.Transcript.trim().length > 0)
+      .filter((row) => row.Transcript.trim().length > 0 || row["LLM Responses"].trim().length > 0)
   }
 
   const exportTranscriptRowsToCSV = (
@@ -586,6 +667,27 @@ function HistoryPageContent() {
     )
   }
 
+  const prepareLLMResponseExportData = () => {
+    return llmResponseRows.map(({ meeting, response, responseIndex }) => ({
+      "Meeting ID": meeting.meeting_id || "-",
+      "Agent Name": meeting.agent_type || "-",
+      "Response #": responseIndex + 1,
+      "Called On": formatDate(meeting.start_time_utc || meeting.created_at),
+      "Provider": response.provider || meeting.agent_config?.llm_model?.name || "-",
+      "Model": response.model || meeting.agent_config?.llm_model?.model || "-",
+      Timestamp: response.timestamp || "-",
+      Response: response.content || "-",
+    }))
+  }
+
+  const exportLLMResponsesToCSV = () => {
+    const rows = prepareLLMResponseExportData()
+    exportTranscriptRowsToCSV(
+      rows,
+      `llm_responses_export_${format(new Date(), "yyyy-MM-dd")}.csv`
+    )
+  }
+
   const handleMeetingClick = async (meeting: Meeting) => {
     setSelectedMeeting(meeting)
     setIsSheetOpen(true)
@@ -616,6 +718,25 @@ function HistoryPageContent() {
         {/* Action Bar */}
         <div className="flex items-center justify-between px-5 lg:px-8 py-4 bg-white border-b border-slate-200">
           <div className="flex items-center gap-3">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+              <Button
+                type="button"
+                variant={historyView === "calls" ? "default" : "ghost"}
+                className={`h-9 px-3 text-sm rounded-md ${historyView === "calls" ? "bg-slate-900 text-white hover:bg-slate-800" : "text-slate-600 hover:text-slate-900"}`}
+                onClick={() => setHistoryView("calls")}
+              >
+                Calls
+              </Button>
+              <Button
+                type="button"
+                variant={historyView === "llm-responses" ? "default" : "ghost"}
+                className={`h-9 px-3 text-sm rounded-md ${historyView === "llm-responses" ? "bg-slate-900 text-white hover:bg-slate-800" : "text-slate-600 hover:text-slate-900"}`}
+                onClick={() => setHistoryView("llm-responses")}
+              >
+                LLM Responses
+              </Button>
+            </div>
+
             {/* Date Range Button */}
             {mounted && (
               <Popover open={dateRangeOpen} onOpenChange={setDateRangeOpen}>
@@ -824,14 +945,31 @@ function HistoryPageContent() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={exportToCSV}>Export as CSV</DropdownMenuItem>
-                  <DropdownMenuItem onClick={exportToPDF}>Export as PDF</DropdownMenuItem>
-                  <DropdownMenuItem onClick={exportAllTranscriptionsToCSV}>
-                    Export All Transcriptions (CSV)
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={exportSelectedAgentTranscriptionsToCSV}>
-                    Export Transcriptions for Selected Agent (CSV)
-                  </DropdownMenuItem>
+                  {historyView === "calls" ? (
+                    <>
+                      <DropdownMenuItem onClick={exportToCSV}>Export as CSV</DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportToPDF}>Export as PDF</DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportAllTranscriptionsToCSV}>
+                        Export All Transcriptions (CSV)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportSelectedAgentTranscriptionsToCSV}>
+                        Export Transcriptions for Selected Agent (CSV)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportLLMResponsesToCSV}>
+                        Export LLM Responses (CSV)
+                      </DropdownMenuItem>
+                    </>
+                  ) : (
+                    <>
+                      <DropdownMenuItem onClick={exportLLMResponsesToCSV}>
+                        Export LLM Responses (CSV)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportToCSV}>Export Calls CSV</DropdownMenuItem>
+                      <DropdownMenuItem onClick={exportAllTranscriptionsToCSV}>
+                        Export Transcriptions (CSV)
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -893,7 +1031,7 @@ function HistoryPageContent() {
 
         {/* Data Table */}
         <div className="px-5 lg:px-8 py-4">
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className={historyView === "calls" ? "bg-white rounded-xl border border-slate-200 overflow-hidden" : "hidden"}>
             {/* Table Header */}
             <div className="grid grid-cols-8 gap-3 px-5 py-3 bg-slate-50 border-b border-slate-200 text-sm font-medium text-slate-600">
               <div className="flex items-center gap-2">
@@ -1164,8 +1302,8 @@ function HistoryPageContent() {
                     }
                   >
                     <ArrowUpDown className={`h-3.5 w-3.5 ${durationSortOrder
-                        ? "text-slate-600"
-                        : "text-slate-400 hover:text-slate-600"
+                      ? "text-slate-600"
+                      : "text-slate-400 hover:text-slate-600"
                       } cursor-pointer`} />
                   </button>
                 )}
@@ -1213,8 +1351,8 @@ function HistoryPageContent() {
                     <div>
                       <span
                         className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-semibold ${meeting.inbound
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-blue-50 text-blue-700"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-blue-50 text-blue-700"
                           }`}
                         style={{
                           minWidth: '84px',
@@ -1287,8 +1425,8 @@ function HistoryPageContent() {
                         }}
                         disabled={isBusy}
                         className={`inline-flex flex-col items-center justify-center rounded-lg border px-3 py-1.5 leading-tight ${isBusy
-                            ? "border-slate-200 text-slate-300 cursor-not-allowed"
-                            : "border-slate-200 text-slate-800 hover:bg-slate-50"
+                          ? "border-slate-200 text-slate-300 cursor-not-allowed"
+                          : "border-slate-200 text-slate-800 hover:bg-slate-50"
                           }`}
                         title={isBusy ? "No call log data" : "Open recording and transcript"}
                       >
@@ -1321,6 +1459,60 @@ function HistoryPageContent() {
             )}
           </div>
 
+          {historyView === "llm-responses" && (
+            <div className="px-5 lg:px-8 py-4">
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                <div className="grid grid-cols-12 gap-3 px-5 py-3 bg-slate-50 border-b border-slate-200 text-sm font-medium text-slate-600">
+                  <div className="col-span-4 flex items-center gap-2">Response</div>
+                  <div className="col-span-2 flex items-center gap-2">Agent Name</div>
+                  <div className="col-span-2 flex items-center gap-2">Called On</div>
+                  <div className="col-span-2 flex items-center gap-2">Provider</div>
+                  <div className="col-span-2 flex items-center gap-2">Model</div>
+                </div>
+
+                {isLoading ? (
+                  <div className="px-5 py-12 text-center text-slate-500">
+                    Loading LLM responses...
+                  </div>
+                ) : paginatedLLMResponses.length === 0 ? (
+                  <div className="px-5 py-12 text-center text-slate-500">
+                    {activeFilters.length > 0
+                      ? "No LLM responses match your filters"
+                      : "No LLM responses found"}
+                  </div>
+                ) : (
+                  paginatedLLMResponses.map(({ meeting, response, responseIndex }) => (
+                    <div
+                      key={`${meeting.meeting_id}-${responseIndex}`}
+                      onClick={() => handleMeetingClick(meeting)}
+                      className="grid grid-cols-12 gap-3 px-5 py-4 border-b border-slate-100 items-start hover:bg-slate-50 cursor-pointer"
+                    >
+                      <div className="col-span-4 text-sm text-slate-900">
+                        <div className="font-medium text-slate-700 mb-1">Response {responseIndex + 1}</div>
+                        <div className="whitespace-pre-wrap leading-6">{response.content}</div>
+                        {response.timestamp && (
+                          <div className="text-xs text-slate-400 mt-2">{response.timestamp}</div>
+                        )}
+                      </div>
+                      <div className="col-span-2 text-sm text-slate-900">
+                        {meeting.agent_type || "-"}
+                      </div>
+                      <div className="col-span-2 text-sm text-slate-900">
+                        {formatDate(meeting.start_time_utc || meeting.created_at)}
+                      </div>
+                      <div className="col-span-2 text-sm text-slate-700">
+                        {response.provider || meeting.agent_config?.llm_model?.name || "-"}
+                      </div>
+                      <div className="col-span-2 text-sm text-slate-700">
+                        {response.model || meeting.agent_config?.llm_model?.model || "-"}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Pagination */}
           <div className="flex items-center justify-center gap-4 mt-4">
             <Button
@@ -1333,14 +1525,14 @@ function HistoryPageContent() {
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <span className="text-sm text-slate-600">
-              Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, filteredMeetings.length)} calls
+              Showing {totalHistoryRows === 0 ? 0 : ((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, totalHistoryRows)} {historyView === "calls" ? "calls" : "responses"}
             </span>
             <Button
               variant="outline"
               size="icon"
               className="h-9 w-9 rounded-full"
               onClick={() => setCurrentPage(p => p + 1)}
-              disabled={currentPage * itemsPerPage >= filteredMeetings.length}
+              disabled={currentPage * itemsPerPage >= totalHistoryRows}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>

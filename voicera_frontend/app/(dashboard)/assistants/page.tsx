@@ -79,6 +79,7 @@ const getProviderOfficialName = (providerId: string): string => {
     playht: "PlayHT",
     groq: "Groq",
     grok: "Grok",
+    gemma: "Gemma",
   }
   return nameMap[providerId] || providerId.charAt(0).toUpperCase() + providerId.slice(1)
 }
@@ -108,6 +109,12 @@ const llmProviders = {
       "o1",
       "o1-mini",
       "o1-preview",
+    ],
+  },
+  gemma: {
+    name: "Gemma",
+    models: [
+      "google/gemma-4-26B-A4B-it",
     ],
   },
   qwen: {
@@ -604,7 +611,7 @@ export default function AssistantsPage() {
       }
 
       // Step 3: Delete the agent
-      const agentId = agent.id || agent._id || agent.agent_type
+      const agentId = agent.agent_id || agent.id || agent._id || agent.agent_type
       if (!agentId) {
         throw new Error("Agent ID is missing")
       }
@@ -672,6 +679,10 @@ export default function AssistantsPage() {
       }
       if (key === "llmProvider") {
         updated.llmModel = ""
+        const nextProvider = llmProviders[value as keyof typeof llmProviders]
+        if (nextProvider?.models?.length === 1) {
+          updated.llmModel = nextProvider.models[0]
+        }
         if ((value as string) !== "openai") {
           updated.knowledgeEnabled = false
           updated.knowledgeDocumentIds = []
@@ -1033,18 +1044,18 @@ export default function AssistantsPage() {
                   onClick={() => isAccessible && setCreateStep(step.id)}
                   disabled={!isAccessible}
                   className={`shrink-0 min-w-[140px] sm:min-w-[160px] flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-all duration-150 ${isActive
-                      ? "bg-slate-100"
-                      : isAccessible
-                        ? "hover:bg-slate-50 cursor-pointer"
-                        : "opacity-50 cursor-not-allowed"
+                    ? "bg-slate-100"
+                    : isAccessible
+                      ? "hover:bg-slate-50 cursor-pointer"
+                      : "opacity-50 cursor-not-allowed"
                     }`}
                 >
                   <div
                     className={`h-8 w-8 rounded-md flex items-center justify-center transition-all duration-150 shrink-0 ${isActive
-                        ? "bg-slate-900 text-white"
-                        : isCompleted
-                          ? "bg-slate-200 text-slate-600"
-                          : "bg-slate-100 text-slate-400"
+                      ? "bg-slate-900 text-white"
+                      : isCompleted
+                        ? "bg-slate-200 text-slate-600"
+                        : "bg-slate-100 text-slate-400"
                       }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -1142,8 +1153,8 @@ export default function AssistantsPage() {
                         </SelectTrigger>
                         <SelectContent className="rounded-lg">
                           {Object.entries(llmProviders).map(([id, provider]) => {
-                            // OpenAI, Qwen, and Kenpath are always available (built-in)
-                            const isBuiltIn = id === "openai" || id === "qwen" || id === "kenpath"
+                            // OpenAI, Qwen, Gemma, and Kenpath are always available (built-in)
+                            const isBuiltIn = id === "openai" || id === "qwen" || id === "kenpath" || id === "gemma"
                             // Check if provider has integration (API key configured)
                             const isIntegrated = integratedProviders.has(id) || integratedProviders.has(provider.name.toLowerCase())
                             const isAvailable = isBuiltIn || isIntegrated
@@ -1214,6 +1225,14 @@ export default function AssistantsPage() {
                           Increasing temperature enables heightened creativity, but increases chance of deviation from prompt
                         </p>
                       </div>
+                    </div>
+                  )}
+
+                  {config.llmProvider === "gemma" && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                      <p className="text-sm text-blue-700">
+                        Gemma is configured on the voice server with `NVIDIA_GEMMA_LLM_ENDPOINT` and `NVIDIA_GEMMA_LLM_API_KEY`, so no dashboard integration entry is required.
+                      </p>
                     </div>
                   )}
 

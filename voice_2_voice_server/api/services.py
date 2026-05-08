@@ -30,6 +30,7 @@ from services.ai4bharat.tts import IndicParlerRESTTTSService
 from services.ai4bharat.stt import IndicConformerRESTSTTService
 from services.bhashini.stt import BhashiniSTTService
 from services.bhashini.tts import BhashiniTTSService
+from services.gemma_llm.llm import create_gemma_llm
 from services.openai_kb_llm import OpenAIKnowledgeLLMService
 from services.vllm_qwen import create_voice_llm, VLLM_API_KEY, VLLM_BASE_URL
 from config import get_llm_model
@@ -42,6 +43,14 @@ from .backend_utils import fetch_integration_key
 class ServiceCreationError(Exception):
     """Raised when a service cannot be created."""
     pass
+
+
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def create_llm_service(
@@ -103,6 +112,28 @@ def create_llm_service(
         # Store user aggregator params on the service instance for later use
         service._user_aggregator_params = user_aggregator_params
 
+        return service
+    elif provider_normalized in ("Gemma", "gemma"):
+        resolved_model = get_llm_model("gemma", model)
+        api_key = os.getenv("NVIDIA_GEMMA_LLM_API_KEY")
+        if not api_key:
+            raise ServiceCreationError(
+                "NVIDIA_GEMMA_LLM_API_KEY must be configured for Gemma LLM."
+            )
+        user_aggregator_params = LLMUserAggregatorParams(
+            aggregation_timeout=args.get("aggregation_timeout", 0.05)
+        )
+        service = create_gemma_llm(
+            model=resolved_model,
+            api_key=api_key,
+            endpoint=os.getenv("NVIDIA_GEMMA_LLM_ENDPOINT"),
+            temperature=float(args.get("temperature", 0.7)),
+            max_tokens=int(args.get("max_tokens", 1024)),
+            top_p=float(args.get("top_p", 0.9)),
+            stream=_parse_bool(args.get("stream", True), default=True),
+            timeout_seconds=int(args.get("timeout_seconds", 60)),
+        )
+        service._user_aggregator_params = user_aggregator_params
         return service
     elif provider_normalized == "Kenpath":
         return KenpathLLM(

@@ -37,6 +37,8 @@ def save_call_recording(recording_data: CallRecordingCreate) -> Dict[str, Any]:
         # Add optional fields if provided
         if recording_data.transcript_content:
             update_doc["transcript_content"] = recording_data.transcript_content
+        if recording_data.llm_responses:
+            update_doc["llm_responses"] = recording_data.llm_responses
         
         if recording_data.call_duration is not None:
             update_doc["duration"] = recording_data.call_duration

@@ -10,6 +10,22 @@ import string
 
 logger = logging.getLogger(__name__)
 
+
+def _agent_lookup_filter(identifier: str) -> Dict[str, Any]:
+    """
+    Build a lookup filter that accepts either agent_type or agent_id.
+
+    Older flows use agent_type as the route identifier, while newer frontend
+    flows pass the stable agent_id. Supporting both keeps edit/delete working
+    for existing records.
+    """
+    return {
+        "$or": [
+            {"agent_type": identifier},
+            {"agent_id": identifier},
+        ]
+    }
+
 def create_agent(agent_data: AgentConfigCreate) -> Dict[str, Any]:
     """
     Create a new agent type for a given org.
@@ -88,7 +104,7 @@ def fetch_agent_config(agent_type: str) -> Optional[Dict[str, Any]]:
     try:
         db = get_database()
         agent_table = db["AgentConfig"]
-        agent = agent_table.find_one({"agent_type": agent_type})
+        agent = agent_table.find_one(_agent_lookup_filter(agent_type))
         return agent
     except Exception as e:
         logger.error(f"Error fetching agent config: {str(e)}")
@@ -171,7 +187,7 @@ def update_agent_config(agent_type: str, agent_data: AgentConfigUpdate) -> Dict[
             update_doc["vobiz_answer_url"] = agent_data.vobiz_answer_url
         
         result = agent_table.update_one(
-            {"agent_type": agent_type},
+            _agent_lookup_filter(agent_type),
             {"$set": update_doc}
         )
         
@@ -199,7 +215,7 @@ def delete_agent(agent_type: str) -> Dict[str, Any]:
         db = get_database()
         agent_table = db["AgentConfig"]
         
-        result = agent_table.delete_one({"agent_type": agent_type})
+        result = agent_table.delete_one(_agent_lookup_filter(agent_type))
         
         if result.deleted_count == 0:
             return {"status": "fail", "message": "Agent type not found"}
@@ -229,4 +245,3 @@ def fetch_agent_by_phone_number(phone_number: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching agent by phone number: {str(e)}")
         return None
-

@@ -115,6 +115,12 @@ const providers: Provider[] = [
     capabilities: ["llm"],
     description: "x.AI Grok models with OpenAI-compatible API",
   },
+  {
+    id: "gemma",
+    name: "Gemma",
+    capabilities: ["llm"],
+    description: "Google Gemma 4 on NVIDIA NVCF",
+  },
 ]
 
 interface TelephonyProvider {

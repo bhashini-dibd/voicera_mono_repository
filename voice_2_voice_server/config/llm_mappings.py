@@ -8,6 +8,7 @@ LLM_DEFAULT_MODELS = {
     "Grok": "grok-3-beta",
     "grok": "grok-3-beta",
     "qwen": "Qwen/Qwen3-8B",
+    "gemma": "google/gemma-4-26B-A4B-it",
 }
 
 

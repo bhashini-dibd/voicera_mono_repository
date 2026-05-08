@@ -601,6 +601,7 @@ export interface Meeting {
   transcript_url?: string
   transcript_content?: string
   transcript?: TranscriptMessage[]  // Parsed transcript from backend
+  llm_responses?: LLMResponseMessage[]
   duration?: number
   call_busy?: boolean
 }
@@ -609,6 +610,14 @@ export interface TranscriptMessage {
   role: 'user' | 'agent' | 'assistant' | 'human'
   content: string
   timestamp?: string
+}
+
+export interface LLMResponseMessage {
+  role: 'assistant'
+  content: string
+  timestamp?: string
+  provider?: string
+  model?: string
 }
 
 export interface MeetingDetails extends Meeting {
