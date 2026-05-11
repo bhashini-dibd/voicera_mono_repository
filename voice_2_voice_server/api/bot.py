@@ -108,6 +108,158 @@ class FastPunctuationAggregator(BaseTextAggregator):
         self._text = ""
 
 
+class GemmaTextSanitizingAggregator(FastPunctuationAggregator):
+    """Gemma-specific cleanup so broken spacing and junk fragments do not reach TTS."""
+
+    _allowed_short_tokens = {
+        "हा", "हो", "हाँ", "नहीं", "जी", "ठीक", "ठीक.", "ठीक है", "धन्यवाद",
+        "thanks", "thank you", "ok", "okay", "yes", "no",
+    }
+
+    _deva_lexicon = [
+        "नमस्ते", "भाषिणी", "भाषिनी", "सहायक", "मुझे", "आप", "आपने", "आपका", "आपकी", "आपके",
+        "कृपया", "धन्यवाद", "क्योंकि", "क्यों", "कहाँ", "कहाँ", "कैसे", "कौन", "कौनसा",
+        "क्या", "किया", "किये", "किए", "करे", "करें", "कर", "करना", "करता", "करती", "करते",
+        "रहा", "रही", "रहे", "हूँ", "हूं", "है", "हैं", "था", "थी", "थे", "हो", "जी",
+        "इंस्टॉल", "ऐप", "मोबाइल", "उपयोग", "अनुभव", "अच्छा", "अच्छी", "बहुत", "संतुष्ट",
+        "बात", "बताएं", "बताइए", "जानना", "जानता", "जानती", "जानते", "लिए", "संबंधित",
+        "फीडबैक", "अनुवाद", "ट्रांसलेट", "दस्तावेज", "दस्तावेज़", "डॉक्यूमेंट", "पीडीएफ",
+        "फॉर्मेट", "इंग्लिश", "हिंदी", "मराठी", "भाषा", "भाषाओं", "में", "से", "पर", "को",
+        "का", "की", "के", "और", "या", "तो", "भी", "नहीं", "हाँ", "हा", "ठीक", "समस्या",
+        "समाधान", "फोन", "कॉल", "कष्ट", "करें", "करिए", "जवाब", "सवाल", "समझ", "समझा",
+        "सकता", "सकती", "सकते", "सकूँ", "सकूं", "सकते", "चाहता", "चाहती", "चाहते",
+        "थैंक", "यू", "थैंक्स", "ओके", "ओके.", "शुभ", "दिन",
+    ]
+
+    _deva_lexicon = sorted(set(_deva_lexicon), key=len, reverse=True)
+    _deva_first_chars = {}
+    for token in _deva_lexicon:
+        _deva_first_chars.setdefault(token[0], []).append(token)
+
+    def _clean_text(self, text: str) -> str:
+        import re
+
+        text = (text or "").replace("\u200b", " ").replace("\ufeff", " ")
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return ""
+
+        text = re.sub(r"([।!?.,:;])(?=\S)", r"\1 ", text)
+        text = re.sub(r"([\u0900-\u097F])([A-Za-z0-9(])", r"\1 \2", text)
+        text = re.sub(r"([A-Za-z0-9)])([\u0900-\u097F])", r"\1 \2", text)
+        text = re.sub(r"\(\s*", "( ", text)
+        text = re.sub(r"\s*\)", " )", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def _segment_devanagari_run(self, text: str) -> str:
+        import re
+
+        if not text:
+            return ""
+
+        out = []
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            candidates = self._deva_first_chars.get(ch, [])
+            best = None
+            for token in candidates:
+                if text.startswith(token, i):
+                    best = token
+                    break
+
+            if best:
+                out.append(best)
+                i += len(best)
+                continue
+
+            next_boundary = None
+            for j in range(i + 1, len(text)):
+                next_candidates = self._deva_first_chars.get(text[j], [])
+                for token in next_candidates:
+                    if text.startswith(token, j):
+                        next_boundary = j
+                        break
+                if next_boundary is not None:
+                    break
+
+            if next_boundary is None:
+                out.append(text[i:])
+                break
+
+            out.append(text[i:next_boundary])
+            i = next_boundary
+
+        segmented = " ".join(part for part in out if part.strip())
+        segmented = re.sub(r"\s+", " ", segmented).strip()
+        return segmented
+
+    def _rebuild_spacing(self, text: str) -> str:
+        import re
+
+        if not text:
+            return ""
+
+        parts = re.findall(r"[\u0900-\u097F]+|[A-Za-z0-9]+|[^\w\s]", text, flags=re.UNICODE)
+        rebuilt = []
+        for part in parts:
+            if re.fullmatch(r"[\u0900-\u097F]+", part):
+                rebuilt.append(self._segment_devanagari_run(part))
+            else:
+                rebuilt.append(part)
+        text = " ".join(piece for piece in rebuilt if piece.strip())
+        text = re.sub(r"\b([^\W\d_]+)(?:\s+\1\b)+", r"\1", text, flags=re.IGNORECASE | re.UNICODE)
+        text = re.sub(r"\s+([।!?.,:;])", r"\1", text)
+        text = re.sub(r"([।!?.,:;])(?=\S)", r"\1 ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text and not re.search(r"[।!?]$", text):
+            words = text.split()
+            if len(words) > 10:
+                chunks = [" ".join(words[i:i + 12]) for i in range(0, len(words), 12)]
+                text = "। ".join(chunk.strip() for chunk in chunks if chunk.strip())
+            if text and not re.search(r"[।!?]$", text):
+                text = f"{text}।"
+        return text
+
+    def _looks_like_noise(self, text: str) -> bool:
+        import re
+
+        stripped = (text or "").strip()
+        if not stripped:
+            return True
+
+        lower = stripped.lower()
+        if lower in self._allowed_short_tokens:
+            return False
+
+        alpha_count = sum(ch.isalnum() for ch in stripped)
+        if alpha_count == 0:
+            return True
+
+        if len(stripped) < 3 and lower not in self._allowed_short_tokens:
+            return True
+
+        if re.fullmatch(r"(.)\1{2,}", stripped):
+            return True
+
+        return False
+
+    async def aggregate(self, text: str):
+        cleaned = self._rebuild_spacing(self._clean_text(text))
+        if self._looks_like_noise(cleaned):
+            return
+        async for item in super().aggregate(cleaned):
+            yield item
+
+    async def flush(self):
+        cleaned = self._rebuild_spacing(self._clean_text(self._text))
+        self._text = ""
+        if self._looks_like_noise(cleaned):
+            return None
+        return Aggregation(cleaned, AggregationType.SENTENCE)
+
+
 def patch_immediate_first_chunk(transport):
     """Patch transport to send first audio chunk immediately with zero delay."""
     output = transport.output()

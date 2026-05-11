@@ -80,6 +80,7 @@ const getProviderOfficialName = (providerId: string): string => {
     playht: "PlayHT",
     groq: "Groq",
     grok: "Grok",
+    gemma: "Gemma",
   }
   return nameMap[providerId] || providerId.charAt(0).toUpperCase() + providerId.slice(1)
 }
@@ -107,6 +108,7 @@ const getProviderIdFromName = (providerName: string): string => {
     "PlayHT": "playht",
     "Groq": "groq",
     "Grok": "grok",
+    "Gemma": "gemma",
   }
   return reverseMap[providerName] || providerName.toLowerCase()
 }
@@ -182,6 +184,12 @@ const llmProviders = {
       "grok-3-beta",
       "grok-2-1212",
       "grok-2-vision-1212",
+    ],
+  },
+  gemma: {
+    name: "Gemma",
+    models: [
+      "google/gemma-4-26B-A4B-it",
     ],
   },
 }
@@ -372,9 +380,19 @@ export default function AgentDetailPage() {
   // Get LLM models for selected provider
   const availableLLMModels = useMemo(() => {
     if (!llmProvider) return []
+    if (llmProvider === "gemma") {
+      return ["google/gemma-4-26B-A4B-it"]
+    }
     const provider = llmProviders[llmProvider as keyof typeof llmProviders]
     return provider?.models || []
   }, [llmProvider])
+
+  useEffect(() => {
+    if (!llmProvider || llmModel) return
+    if (availableLLMModels.length === 1) {
+      setLlmModel(availableLLMModels[0])
+    }
+  }, [llmProvider, llmModel, availableLLMModels])
   const selectedKnowledgeDocs = useMemo(
     () => knowledgeDocs.filter((d) => knowledgeDocumentIds.includes(d.document_id)),
     [knowledgeDocs, knowledgeDocumentIds]
@@ -454,7 +472,7 @@ export default function AgentDetailPage() {
 
           // Load LLM settings - convert official name to internal ID
           const llmProviderName = agentData.agent_config?.llm_model?.name || ""
-          setLlmProvider(getProviderIdFromName(llmProviderName))
+          setLlmProvider(llmProviderName === "Gemma" ? "gemma" : getProviderIdFromName(llmProviderName))
           setLlmModel(agentData.agent_config?.llm_model?.model || "")
           setKnowledgeEnabled(Boolean((agentData.agent_config as any)?.knowledge_base_enabled))
           setKnowledgeDocumentIds(
@@ -828,10 +846,10 @@ export default function AgentDetailPage() {
                 >
                   <div
                     className={`h-8 w-8 rounded-md flex items-center justify-center transition-all duration-150 shrink-0 ${isActive
-                        ? "bg-slate-900 text-white"
-                        : isCompleted
-                          ? "bg-slate-200 text-slate-600"
-                          : "bg-slate-100 text-slate-400"
+                      ? "bg-slate-900 text-white"
+                      : isCompleted
+                        ? "bg-slate-200 text-slate-600"
+                        : "bg-slate-100 text-slate-400"
                       }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -894,6 +912,10 @@ export default function AgentDetailPage() {
                                 setKnowledgeEnabled(false)
                                 setKnowledgeDocumentIds([])
                               }
+                              const nextProvider = llmProviders[v as keyof typeof llmProviders]
+                              if (nextProvider?.models?.length === 1) {
+                                setLlmModel(nextProvider.models[0])
+                              }
                             }}
                           >
                             <SelectTrigger className="border-slate-200 h-11 shadow-sm rounded-md focus:ring-slate-300 transition focus:border-slate-500 bg-white">
@@ -901,8 +923,8 @@ export default function AgentDetailPage() {
                             </SelectTrigger>
                             <SelectContent className="z-[100] rounded-md shadow-lg">
                               {Object.entries(llmProviders).map(([id, provider]) => {
-                                // OpenAI, Qwen, and Kenpath are always available (built-in)
-                                const isBuiltIn = id === "openai" || id === "qwen" || id === "kenpath"
+                                // OpenAI, Qwen, Kenpath, and Gemma are always available (server-configured or built-in)
+                                const isBuiltIn = id === "openai" || id === "qwen" || id === "kenpath" || id === "gemma"
                                 // Check if provider has integration (API key configured)
                                 const isIntegrated = integratedProviders.has(id) || integratedProviders.has(provider.name.toLowerCase())
                                 const isAvailable = isBuiltIn || isIntegrated

@@ -163,6 +163,12 @@ const llmProviders = {
       "grok-2-vision-1212",
     ],
   },
+  gemma: {
+    name: "Gemma",
+    models: [
+      "google/gemma-4-26B-A4B-it",
+    ],
+  },
 }
 
 // Helper function to get agent display name from config
@@ -215,7 +221,7 @@ const defaultConfig: AgentConfig = {
   id: "",
   name: "",
   greetingMessage: "",
-  systemPrompt: "You are a helpful agent. You will help the customer with their queries and doubts. You will never speak more than 2 sentences. Keep your responses concise",
+  systemPrompt: "You are a Bhashini voice assistant. Speak only simple Hindi. Use proper spaces and punctuation. Do not split words or syllables. Do not put punctuation between every word. Ask for Bhashini feedback. Ask if the user has installed the Bhashini mobile app. If not, politely ask them to install it. If the user shares any issue or feedback, acknowledge it and say the Bhashini team will review it and follow up. Keep every reply short and natural.",
   llmProvider: "openai",
   llmModel: "gpt-4o",
   knowledgeEnabled: false,

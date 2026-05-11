@@ -127,9 +127,9 @@ def create_llm_service(
             model=resolved_model,
             api_key=api_key,
             endpoint=os.getenv("NVIDIA_GEMMA_LLM_ENDPOINT"),
-            temperature=float(args.get("temperature", 0.7)),
-            max_tokens=int(args.get("max_tokens", 1024)),
-            top_p=float(args.get("top_p", 0.9)),
+            temperature=float(args.get("temperature", 0.15)),
+            max_tokens=int(args.get("max_tokens", 192)),
+            top_p=float(args.get("top_p", 0.8)),
             stream=_parse_bool(args.get("stream", True), default=True),
             timeout_seconds=int(args.get("timeout_seconds", 60)),
         )
