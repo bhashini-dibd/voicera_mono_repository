@@ -65,7 +65,7 @@ class BhashiniSTTService(STTService):
         await super().start(frame)
         self._session = aiohttp.ClientSession(
             headers={
-                "Authorization": self._api_key,
+                "Authorization": "oMowmlxsAdR3TqmLaY7mG_SBYTjGmg_p124n8G6FKA67dkmoDLWBtNElIpQQqxHk",
                 "Content-Type": "application/json",
                 "Accept": "*/*",
             }
