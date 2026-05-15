@@ -108,158 +108,6 @@ class FastPunctuationAggregator(BaseTextAggregator):
         self._text = ""
 
 
-class GemmaTextSanitizingAggregator(FastPunctuationAggregator):
-    """Gemma-specific cleanup so broken spacing and junk fragments do not reach TTS."""
-
-    _allowed_short_tokens = {
-        "हा", "हो", "हाँ", "नहीं", "जी", "ठीक", "ठीक.", "ठीक है", "धन्यवाद",
-        "thanks", "thank you", "ok", "okay", "yes", "no",
-    }
-
-    _deva_lexicon = [
-        "नमस्ते", "भाषिणी", "भाषिनी", "सहायक", "मुझे", "आप", "आपने", "आपका", "आपकी", "आपके",
-        "कृपया", "धन्यवाद", "क्योंकि", "क्यों", "कहाँ", "कहाँ", "कैसे", "कौन", "कौनसा",
-        "क्या", "किया", "किये", "किए", "करे", "करें", "कर", "करना", "करता", "करती", "करते",
-        "रहा", "रही", "रहे", "हूँ", "हूं", "है", "हैं", "था", "थी", "थे", "हो", "जी",
-        "इंस्टॉल", "ऐप", "मोबाइल", "उपयोग", "अनुभव", "अच्छा", "अच्छी", "बहुत", "संतुष्ट",
-        "बात", "बताएं", "बताइए", "जानना", "जानता", "जानती", "जानते", "लिए", "संबंधित",
-        "फीडबैक", "अनुवाद", "ट्रांसलेट", "दस्तावेज", "दस्तावेज़", "डॉक्यूमेंट", "पीडीएफ",
-        "फॉर्मेट", "इंग्लिश", "हिंदी", "मराठी", "भाषा", "भाषाओं", "में", "से", "पर", "को",
-        "का", "की", "के", "और", "या", "तो", "भी", "नहीं", "हाँ", "हा", "ठीक", "समस्या",
-        "समाधान", "फोन", "कॉल", "कष्ट", "करें", "करिए", "जवाब", "सवाल", "समझ", "समझा",
-        "सकता", "सकती", "सकते", "सकूँ", "सकूं", "सकते", "चाहता", "चाहती", "चाहते",
-        "थैंक", "यू", "थैंक्स", "ओके", "ओके.", "शुभ", "दिन",
-    ]
-
-    _deva_lexicon = sorted(set(_deva_lexicon), key=len, reverse=True)
-    _deva_first_chars = {}
-    for token in _deva_lexicon:
-        _deva_first_chars.setdefault(token[0], []).append(token)
-
-    def _clean_text(self, text: str) -> str:
-        import re
-
-        text = (text or "").replace("\u200b", " ").replace("\ufeff", " ")
-        text = re.sub(r"\s+", " ", text).strip()
-        if not text:
-            return ""
-
-        text = re.sub(r"([।!?.,:;])(?=\S)", r"\1 ", text)
-        text = re.sub(r"([\u0900-\u097F])([A-Za-z0-9(])", r"\1 \2", text)
-        text = re.sub(r"([A-Za-z0-9)])([\u0900-\u097F])", r"\1 \2", text)
-        text = re.sub(r"\(\s*", "( ", text)
-        text = re.sub(r"\s*\)", " )", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
-
-    def _segment_devanagari_run(self, text: str) -> str:
-        import re
-
-        if not text:
-            return ""
-
-        out = []
-        i = 0
-        while i < len(text):
-            ch = text[i]
-            candidates = self._deva_first_chars.get(ch, [])
-            best = None
-            for token in candidates:
-                if text.startswith(token, i):
-                    best = token
-                    break
-
-            if best:
-                out.append(best)
-                i += len(best)
-                continue
-
-            next_boundary = None
-            for j in range(i + 1, len(text)):
-                next_candidates = self._deva_first_chars.get(text[j], [])
-                for token in next_candidates:
-                    if text.startswith(token, j):
-                        next_boundary = j
-                        break
-                if next_boundary is not None:
-                    break
-
-            if next_boundary is None:
-                out.append(text[i:])
-                break
-
-            out.append(text[i:next_boundary])
-            i = next_boundary
-
-        segmented = " ".join(part for part in out if part.strip())
-        segmented = re.sub(r"\s+", " ", segmented).strip()
-        return segmented
-
-    def _rebuild_spacing(self, text: str) -> str:
-        import re
-
-        if not text:
-            return ""
-
-        parts = re.findall(r"[\u0900-\u097F]+|[A-Za-z0-9]+|[^\w\s]", text, flags=re.UNICODE)
-        rebuilt = []
-        for part in parts:
-            if re.fullmatch(r"[\u0900-\u097F]+", part):
-                rebuilt.append(self._segment_devanagari_run(part))
-            else:
-                rebuilt.append(part)
-        text = " ".join(piece for piece in rebuilt if piece.strip())
-        text = re.sub(r"\b([^\W\d_]+)(?:\s+\1\b)+", r"\1", text, flags=re.IGNORECASE | re.UNICODE)
-        text = re.sub(r"\s+([।!?.,:;])", r"\1", text)
-        text = re.sub(r"([।!?.,:;])(?=\S)", r"\1 ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        if text and not re.search(r"[।!?]$", text):
-            words = text.split()
-            if len(words) > 10:
-                chunks = [" ".join(words[i:i + 12]) for i in range(0, len(words), 12)]
-                text = "। ".join(chunk.strip() for chunk in chunks if chunk.strip())
-            if text and not re.search(r"[।!?]$", text):
-                text = f"{text}।"
-        return text
-
-    def _looks_like_noise(self, text: str) -> bool:
-        import re
-
-        stripped = (text or "").strip()
-        if not stripped:
-            return True
-
-        lower = stripped.lower()
-        if lower in self._allowed_short_tokens:
-            return False
-
-        alpha_count = sum(ch.isalnum() for ch in stripped)
-        if alpha_count == 0:
-            return True
-
-        if len(stripped) < 3 and lower not in self._allowed_short_tokens:
-            return True
-
-        if re.fullmatch(r"(.)\1{2,}", stripped):
-            return True
-
-        return False
-
-    async def aggregate(self, text: str):
-        cleaned = self._rebuild_spacing(self._clean_text(text))
-        if self._looks_like_noise(cleaned):
-            return
-        async for item in super().aggregate(cleaned):
-            yield item
-
-    async def flush(self):
-        cleaned = self._rebuild_spacing(self._clean_text(self._text))
-        self._text = ""
-        if self._looks_like_noise(cleaned):
-            return None
-        return Aggregation(cleaned, AggregationType.SENTENCE)
-
-
 def patch_immediate_first_chunk(transport):
     """Patch transport to send first audio chunk immediately with zero delay."""
     output = transport.output()
@@ -311,7 +159,6 @@ async def run_bot(
         llm_config = dict(agent_config.get("llm_model", {}) or {})
         stt_config = agent_config.get("stt_model", {})
         tts_config = agent_config.get("tts_model", {})
-        stt_provider_name = str(stt_config.get("name") or "").strip().lower()
         llm_provider_name = str(llm_config.get("name") or "").strip().lower()
         if llm_provider_name == "openai":
             llm_config["knowledge_base_enabled"] = bool(
@@ -320,7 +167,7 @@ async def run_bot(
             llm_config["knowledge_document_ids"] = list(
                 agent_config.get("knowledge_document_ids") or []
             )
-            llm_config["knowledge_top_k"] = int(agent_config.get("knowledge_top_k", 3) or 3)
+            llm_config["knowledge_top_k"] = 10
         
         language = agent_config.get("language")
         if language:
@@ -330,24 +177,7 @@ async def run_bot(
                 tts_config["language"] = language
 
         org_id = agent_config.get("org_id")
-        is_bhashini_stt = stt_provider_name == "bhashini"
-        min_transcript_chars = 2 if is_bhashini_stt else 1
-        bot_vad_stop_secs = 0.35 if is_bhashini_stt else 0.2
-
-        if is_bhashini_stt:
-            vad_analyzer = SileroVADAnalyzer(
-                sample_rate=sample_rate,
-                params=VADParams(
-                    stop_secs=0.45,
-                    min_volume=0.75,
-                    confidence=0.55,
-                    start_secs=0.25,
-                ),
-            )
-            vad_analyzer._smoothing_factor = 0.08
-            import pipecat.transports.base_output
-            pipecat.transports.base_output.BOT_VAD_STOP_SECS = bot_vad_stop_secs
-
+     
         llm = create_llm_service(
             llm_config,
             vistaar_session_id=vistaar_session_id,
@@ -511,10 +341,10 @@ async def bot(
     vad_analyzer = SileroVADAnalyzer(
         sample_rate=sample_rate,
         params=VADParams(
-            stop_secs=0.3,
-            min_volume=0.6,
+            stop_secs=0.4,
+            min_volume=0.5,
             confidence=0.4,
-            start_secs=0.3,
+            start_secs=0.1,
         )
     )
     vad_analyzer._smoothing_factor = 0.1  # Faster volume change response
@@ -522,10 +352,7 @@ async def bot(
     pipecat.transports.base_input.AUDIO_INPUT_TIMEOUT_SECS = 0.1
 
     import pipecat.transports.base_output
-    stt_config = agent_config if isinstance(agent_config, dict) else {}
-    stt_provider_name = str((stt_config.get("stt") or {}).get("name") or "").strip().lower()
-    min_transcript_chars = 2 if stt_provider_name == "bhashini" else 1
-    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.35 if stt_provider_name == "bhashini" else 0.2
+    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.2
     
     transport = FastAPIWebsocketTransport(
         websocket=websocket_client,
@@ -574,21 +401,13 @@ async def bot(
     async def on_transcript_update(processor, frame):
         # Accumulate transcript lines in memory (no I/O during call)
         for message in frame.messages:
-            content = (message.content or "").strip()
-            if not content or len(content) < min_transcript_chars:
-                logger.debug(
-                    "Skipping short transcript fragment (role={}, len={})",
-                    message.role,
-                    len(content),
-                )
-                continue
             timestamp = f"[{message.timestamp}] " if message.timestamp else ""
-            line = f"{timestamp}{message.role}: {content}"
+            line = f"{timestamp}{message.role}: {message.content}"
             logger.info(f"Transcript: {line}")
             call_data["transcript_lines"].append(line)
-            if transcript_callback:
+            if transcript_callback and message.content:
                 try:
-                    await transcript_callback(message.role, content, message.timestamp)
+                    await transcript_callback(message.role, message.content, message.timestamp)
                 except Exception as callback_error:
                     logger.debug(f"Transcript callback failed: {callback_error}")
     
