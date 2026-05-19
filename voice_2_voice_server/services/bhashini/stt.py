@@ -1,29 +1,34 @@
-"""Bhashini HTTP REST STT Service for Pipecat."""
+"""Bhashini HTTP REST STT Service for Pipecat"""
 
-from __future__ import annotations
-
-import asyncio
 import base64
 import io
+import time
 import wave
 from typing import AsyncGenerator, Optional
-
-import aiohttp
 from loguru import logger
 
 from pipecat.frames.frames import (
-    CancelFrame,
-    EndFrame,
-    ErrorFrame,
     Frame,
-    StartFrame,
     TranscriptionFrame,
+    InterimTranscriptionFrame,
+    ErrorFrame,
+    StartFrame,
+    EndFrame,
+    CancelFrame,
     UserStartedSpeakingFrame,
     UserStoppedSpeakingFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.stt_service import STTService
+from pipecat.audio.vad.vad_analyzer import VADAnalyzer, VADState
 from pipecat.utils.time import time_now_iso8601
+
+try:
+    import aiohttp
+except ModuleNotFoundError as e:
+    logger.error(f"Exception: {e}")
+    logger.error("Install with: pip install aiohttp")
+    raise Exception(f"Missing module: {e}")
 
 
 class BhashiniSTTService(STTService):
@@ -39,6 +44,7 @@ class BhashiniSTTService(STTService):
         sample_rate: int = 16000,
         audio_channels: int = 1,
         audio_format: str = "wav",
+        vad_analyzer: Optional[VADAnalyzer] = None,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
@@ -53,9 +59,16 @@ class BhashiniSTTService(STTService):
 
         self._session: Optional[aiohttp.ClientSession] = None
 
-        # Buffer raw PCM chunks while the user is speaking; flush on stop.
-        self._audio_buffer: list[bytes] = []
+        # Buffer raw PCM bytes while the user is speaking; flush on stop.
+        self._audio_buffer: bytes = b""
         self._is_speaking = False
+
+        # Interim / VAD-aware state (ported from IndicConformerRESTSTTService)
+        self._vad_analyzer: Optional[VADAnalyzer] = vad_analyzer
+        self._text_chunks: list[str] = []
+        self._stopping_start_time: Optional[float] = None
+        self._stopping_triggered = False
+        self._STOPPING_DURATION_MS = 10
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -70,6 +83,11 @@ class BhashiniSTTService(STTService):
                 "Accept": "*/*",
             }
         )
+        self._is_speaking = False
+        self._audio_buffer = b""
+        self._text_chunks = []
+        self._stopping_start_time = None
+        self._stopping_triggered = False
         logger.info("Bhashini STT service started")
 
     async def stop(self, frame: EndFrame):
@@ -77,7 +95,8 @@ class BhashiniSTTService(STTService):
         await super().stop(frame)
 
     async def cancel(self, frame: CancelFrame):
-        self._audio_buffer.clear()
+        self._audio_buffer = b""
+        self._text_chunks = []
         await self._close_session()
         await super().cancel(frame)
 
@@ -91,15 +110,14 @@ class BhashiniSTTService(STTService):
     # Audio handling
     # ------------------------------------------------------------------
 
-    def _pcm_to_wav_b64(self, pcm_chunks: list[bytes]) -> str:
-        """Combine raw PCM chunks into a WAV file and return base64 string."""
-        raw = b"".join(pcm_chunks)
+    def _pcm_to_wav_b64(self, pcm_data: bytes) -> str:
+        """Wrap raw PCM bytes into a WAV file and return base64 string."""
         buf = io.BytesIO()
         with wave.open(buf, "wb") as wf:
             wf.setnchannels(self._audio_channels)
-            wf.setsampwidth(2)  # 16-bit PCM
+            wf.setsampwidth(2)          # 16-bit PCM
             wf.setframerate(self._sample_rate)
-            wf.writeframes(raw)
+            wf.writeframes(pcm_data)
         return base64.b64encode(buf.getvalue()).decode("utf-8")
 
     def _build_payload(self, audio_b64: str) -> dict:
@@ -113,8 +131,20 @@ class BhashiniSTTService(STTService):
                     },
                 }
             ],
-            "inputData": {"audio": [{"audioContent": audio_b64}]},
+            "inputData": {
+                "audio": [{"audioContent": audio_b64}]
+            },
         }
+
+    async def _transcribe_buffer(self) -> str:
+        if not self._audio_buffer or len(self._audio_buffer) < 3200:
+            return ""
+        try:
+            audio_b64 = self._pcm_to_wav_b64(self._audio_buffer)
+            return await self._transcribe(audio_b64) or ""
+        except Exception as e:
+            logger.error(f"Transcription error: {e}")
+            return ""
 
     async def _transcribe(self, audio_b64: str) -> Optional[str]:
         """POST to Bhashini pipeline and return the transcript string."""
@@ -140,6 +170,7 @@ class BhashiniSTTService(STTService):
             if not outputs:
                 return None
 
+            # Join all output chunks into a single transcript
             transcript = ". ".join(
                 chunk.get("source", "").strip()
                 for chunk in outputs
@@ -155,54 +186,108 @@ class BhashiniSTTService(STTService):
             return None
 
     # ------------------------------------------------------------------
+    # VAD stopping-state detection (ported from IndicConformerRESTSTTService)
+    # ------------------------------------------------------------------
+
+    def _check_stopping_state(self) -> bool:
+        if self._vad_analyzer is None:
+            return False
+
+        try:
+            vad_state = self._vad_analyzer._vad_state
+
+            if vad_state == VADState.STOPPING:
+                current_time = time.time() * 1000
+
+                if self._stopping_start_time is None:
+                    self._stopping_start_time = current_time
+                    return False
+
+                duration_ms = current_time - self._stopping_start_time
+
+                if duration_ms >= self._STOPPING_DURATION_MS and not self._stopping_triggered:
+                    self._stopping_triggered = True
+                    return True
+
+                return False
+            else:
+                self._stopping_start_time = None
+                self._stopping_triggered = False
+                return False
+
+        except AttributeError:
+            return False
+
+    # ------------------------------------------------------------------
     # STTService interface
     # ------------------------------------------------------------------
 
     async def run_stt(self, audio: bytes) -> AsyncGenerator[Frame, None]:
-        """Called by the base class for every incoming audio chunk."""
-        if audio:
-            self._audio_buffer.append(audio)
-        yield None
-
-    async def _flush_buffer(self):
-        """Encode buffered audio, call Bhashini, push a TranscriptionFrame."""
-        if not self._audio_buffer:
+        if not audio:
             return
 
-        chunks = self._audio_buffer.copy()
-        self._audio_buffer.clear()
+        try:
+            self._audio_buffer += audio
 
-        audio_b64 = self._pcm_to_wav_b64(chunks)
-        transcript = await self._transcribe(audio_b64)
+            if self._check_stopping_state():
+                logger.info("STOPPING state triggered, transcribing buffer")
+                text = await self._transcribe_buffer()
+                if text:
+                    self._text_chunks.append(text)
+                    accumulated = " ".join(self._text_chunks)
+                    logger.info(f"Interim: {accumulated}")
+                    yield InterimTranscriptionFrame(
+                        text=accumulated,
+                        user_id=getattr(self, "_user_id", ""),
+                        timestamp=str(int(time.time() * 1000)),
+                    )
+                self._audio_buffer = b""
 
-        if transcript:
-            logger.info(f"Bhashini transcript: {transcript}")
-            await self.push_frame(
-                TranscriptionFrame(
-                    text=transcript,
-                    user_id=getattr(self, "_user_id", ""),
-                    timestamp=time_now_iso8601(),
-                )
-            )
-        else:
-            logger.debug("Bhashini returned empty transcript")
+        except Exception as e:
+            logger.error(f"STT processing error: {e}")
+            yield ErrorFrame(f"STT processing failed: {str(e)}")
 
     # ------------------------------------------------------------------
-    # Speaking detection
+    # Speaking detection + frame ordering
+    # (UserStoppedSpeakingFrame handled BEFORE super() so TranscriptionFrame
+    #  reaches the aggregator before the stop frame — ported from IndicConformer)
     # ------------------------------------------------------------------
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
+        if isinstance(frame, UserStoppedSpeakingFrame):
+            logger.debug("User stopped speaking — flushing buffer to Bhashini")
+            self._is_speaking = False
+            self._stopping_start_time = None
+            self._stopping_triggered = False
+
+            # Transcribe any remaining buffered audio
+            if self._audio_buffer:
+                transcript = await self._transcribe_buffer()
+                if transcript:
+                    self._text_chunks.append(transcript)
+            self._audio_buffer = b""
+
+            # Push final accumulated transcript BEFORE UserStoppedSpeakingFrame
+            if self._text_chunks:
+                accumulated = " ".join(self._text_chunks)
+                logger.info(f"Final: {accumulated}")
+                await self.push_frame(TranscriptionFrame(
+                    text=accumulated,
+                    user_id=getattr(self, "_user_id", ""),
+                    timestamp=time_now_iso8601(),
+                ))
+                self._text_chunks = []
+
+        # Now let super() push UserStoppedSpeakingFrame downstream
         await super().process_frame(frame, direction)
 
         if isinstance(frame, UserStartedSpeakingFrame):
-            logger.debug("User started speaking - buffering audio")
+            logger.debug("User started speaking — buffering audio")
             self._is_speaking = True
-            self._audio_buffer.clear()
-
-        elif isinstance(frame, UserStoppedSpeakingFrame):
-            logger.debug("User stopped speaking - flushing buffer to Bhashini")
-            self._is_speaking = False
-            await self._flush_buffer()
+            self._stopping_start_time = None
+            self._stopping_triggered = False
+            self._audio_buffer = b""
+            self._text_chunks = []
 
     # ------------------------------------------------------------------
     # Runtime config changes
