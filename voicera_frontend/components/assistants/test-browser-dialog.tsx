@@ -21,7 +21,8 @@ interface TestBrowserDialogProps {
   getAgentDisplayName: (agent: Agent) => string
 }
 
-const TARGET_SAMPLE_RATE = 16000
+const MIC_SAMPLE_RATE = 16000
+const BHASHINI_TTS_SAMPLE_RATE = 44100
 
 function rms(samples: Float32Array): number {
   if (!samples.length) return 0
@@ -61,6 +62,15 @@ function base64ToInt16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer)
 }
 
+function base64ToUint8(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return bytes
+}
+
 function int16ToFloat32(input: Int16Array): Float32Array {
   const out = new Float32Array(input.length)
   for (let i = 0; i < input.length; i++) {
@@ -69,11 +79,30 @@ function int16ToFloat32(input: Int16Array): Float32Array {
   return out
 }
 
-function downsampleTo16k(input: Float32Array, inputRate: number): Float32Array {
-  if (inputRate === TARGET_SAMPLE_RATE) return input
-  if (inputRate < TARGET_SAMPLE_RATE) return input
+function muLawByteToLinearSample(muLaw: number): number {
+  const sample = (~muLaw) & 0xff
+  const sign = sample & 0x80
+  const exponent = (sample >> 4) & 0x07
+  const mantissa = sample & 0x0f
+  let pcm = ((mantissa << 3) + 0x84) << exponent
+  pcm -= 0x84
+  return sign ? -pcm : pcm
+}
 
-  const ratio = inputRate / TARGET_SAMPLE_RATE
+function muLawBase64ToFloat32(base64: string): Float32Array {
+  const muLawBytes = base64ToUint8(base64)
+  const out = new Float32Array(muLawBytes.length)
+  for (let i = 0; i < muLawBytes.length; i++) {
+    out[i] = muLawByteToLinearSample(muLawBytes[i]) / 0x8000
+  }
+  return out
+}
+
+function downsampleTo16k(input: Float32Array, inputRate: number): Float32Array {
+  if (inputRate === MIC_SAMPLE_RATE) return input
+  if (inputRate < MIC_SAMPLE_RATE) return input
+
+  const ratio = inputRate / MIC_SAMPLE_RATE
   const newLength = Math.round(input.length / ratio)
   const result = new Float32Array(newLength)
   let offsetResult = 0
@@ -93,6 +122,94 @@ function downsampleTo16k(input: Float32Array, inputRate: number): Float32Array {
   }
 
   return result
+}
+
+function parseSampleRate(contentType?: string | null): number | null {
+  if (!contentType) return null
+  const match = contentType.match(/rate\s*=\s*(\d+)/i)
+  if (!match) return null
+  const rate = Number(match[1])
+  return Number.isFinite(rate) && rate > 0 ? rate : null
+}
+
+function decodeIncomingAudio(payloadB64: string, contentType?: string | null): Float32Array {
+  const normalizedType = (contentType || "").toLowerCase()
+  if (normalizedType.includes("mulaw") || normalizedType.includes("mu-law")) {
+    return muLawBase64ToFloat32(payloadB64)
+  }
+  return int16ToFloat32(base64ToInt16(payloadB64))
+}
+
+function isBhashiniAgent(agent: Agent | null): boolean {
+  const tts = agent?.agent_config?.tts_model
+  const haystack = `${tts?.name || ""} ${tts?.model || ""} ${tts?.speaker || ""}`.toLowerCase()
+  return haystack.includes("bhashini")
+}
+
+async function requestMicrophoneStream(): Promise<MediaStream> {
+  if (typeof window === "undefined") {
+    throw new Error("Microphone access is only available in the browser")
+  }
+
+  const nav = window.navigator as Navigator & {
+    mediaDevices?: {
+      getUserMedia: (constraints: MediaStreamConstraints) => Promise<MediaStream>
+    }
+    webkitGetUserMedia?: (
+      constraints: MediaStreamConstraints,
+      success: (stream: MediaStream) => void,
+      failure: (error: unknown) => void,
+    ) => void
+    mozGetUserMedia?: (
+      constraints: MediaStreamConstraints,
+      success: (stream: MediaStream) => void,
+      failure: (error: unknown) => void,
+    ) => void
+    msGetUserMedia?: (
+      constraints: MediaStreamConstraints,
+      success: (stream: MediaStream) => void,
+      failure: (error: unknown) => void,
+    ) => void
+    getUserMedia?: (
+      constraints: MediaStreamConstraints,
+      success: (stream: MediaStream) => void,
+      failure: (error: unknown) => void,
+    ) => void
+  }
+
+  if (nav.mediaDevices?.getUserMedia) {
+    return nav.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+    })
+  }
+
+  const legacyGetUserMedia = nav.getUserMedia || nav.webkitGetUserMedia || nav.mozGetUserMedia || nav.msGetUserMedia
+  if (!legacyGetUserMedia) {
+    throw new Error(
+      "This browser does not expose microphone capture APIs. Try opening the test in a secure browser tab with microphone permission enabled.",
+    )
+  }
+
+  return new Promise<MediaStream>((resolve, reject) => {
+    legacyGetUserMedia.call(
+      nav,
+      {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      },
+      resolve,
+      reject,
+    )
+  })
 }
 
 function getBrowserWsUrl(agentId: string): string {
@@ -142,6 +259,24 @@ export function TestBrowserDialog({
     return "Idle"
   }, [isConnected, isConnecting])
 
+  const microphoneSupported = useMemo(() => {
+    if (typeof window === "undefined") return false
+    const nav = window.navigator as Navigator & {
+      mediaDevices?: { getUserMedia?: unknown }
+      webkitGetUserMedia?: unknown
+      mozGetUserMedia?: unknown
+      msGetUserMedia?: unknown
+      getUserMedia?: unknown
+    }
+    return Boolean(
+      nav.mediaDevices?.getUserMedia ||
+      nav.getUserMedia ||
+      nav.webkitGetUserMedia ||
+      nav.mozGetUserMedia ||
+      nav.msGetUserMedia,
+    )
+  }, [])
+
   const teardown = useCallback(async () => {
     const ws = wsRef.current
     wsRef.current = null
@@ -189,16 +324,24 @@ export function TestBrowserDialog({
     await teardown()
   }, [teardown])
 
-  const handleIncomingAudio = (payloadB64: string, sampleRate = TARGET_SAMPLE_RATE) => {
+  const handleIncomingAudio = (
+    payloadB64: string,
+    sampleRate: number | null = BHASHINI_TTS_SAMPLE_RATE,
+    contentType?: string | null,
+  ) => {
     const ctx = audioContextRef.current
     if (!ctx) return
 
-    const int16 = base64ToInt16(payloadB64)
-    if (!int16.length) return
-    const float32 = int16ToFloat32(int16)
+    const normalizedContentType = (contentType || "").toLowerCase()
+    const float32 = decodeIncomingAudio(payloadB64, contentType)
+    if (!float32.length) return
     outputVolumeRef.current = normalizeVolume(rms(float32))
     lastOutputAtRef.current = performance.now()
-    const buffer = ctx.createBuffer(1, float32.length, sampleRate)
+    const bufferSampleRate =
+      sampleRate ||
+      (normalizedContentType.includes("mulaw") || normalizedContentType.includes("mu-law") ? 8000 : null) ||
+      (isBhashiniAgent(agent) ? BHASHINI_TTS_SAMPLE_RATE : MIC_SAMPLE_RATE)
+    const buffer = ctx.createBuffer(1, float32.length, bufferSampleRate)
     buffer.copyToChannel(float32, 0)
 
     const source = ctx.createBufferSource()
@@ -220,14 +363,7 @@ export function TestBrowserDialog({
     setTranscripts([])
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      })
+      const stream = await requestMicrophoneStream()
       mediaStreamRef.current = stream
 
       const ctx = new AudioContext()
@@ -272,7 +408,7 @@ export function TestBrowserDialog({
               event: "media",
               media: {
                 contentType: "audio/x-l16",
-                sampleRate: TARGET_SAMPLE_RATE,
+                sampleRate: MIC_SAMPLE_RATE,
                 payload,
               },
             }),
@@ -290,7 +426,14 @@ export function TestBrowserDialog({
         try {
           const msg = JSON.parse(ev.data)
           if (msg?.event === "playAudio" && msg?.media?.payload) {
-            handleIncomingAudio(msg.media.payload, Number(msg?.media?.sampleRate) || TARGET_SAMPLE_RATE)
+            const mediaSampleRate = Number(msg?.media?.sampleRate)
+            handleIncomingAudio(
+              msg.media.payload,
+              Number.isFinite(mediaSampleRate) && mediaSampleRate > 0
+                ? mediaSampleRate
+                : parseSampleRate(msg?.media?.contentType),
+              msg?.media?.contentType,
+            )
           } else if (msg?.event === "transcript" && msg?.content) {
             const role = msg.role === "assistant" ? "assistant" : "user"
             const content = String(msg.content).trim()
@@ -405,8 +548,8 @@ export function TestBrowserDialog({
                   <div key={t.id} className={`flex ${t.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div
                       className={`max-w-[90%] rounded-2xl px-3 py-2 text-sm ${t.role === "user"
-                          ? "bg-slate-900 text-white"
-                          : "bg-slate-100 text-slate-900"
+                        ? "bg-slate-900 text-white"
+                        : "bg-slate-100 text-slate-900"
                         }`}
                     >
                       <p className="mb-1 text-[10px] font-medium uppercase tracking-wide opacity-70">
@@ -432,12 +575,17 @@ export function TestBrowserDialog({
               <span>Status: {sessionLabel}</span>
             </div>
           </div>
+          {!microphoneSupported && (
+            <p className="mt-2 text-xs text-amber-700">
+              This browser environment does not expose microphone capture APIs, so the browser test cannot start here.
+            </p>
+          )}
           {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
         </div>
 
         <DialogFooter className="gap-2 justify-center sm:justify-center">
           {!isConnected ? (
-            <Button type="button" onClick={startSession} disabled={isConnecting || !agent?.agent_id}>
+            <Button type="button" onClick={startSession} disabled={isConnecting || !agent?.agent_id || !microphoneSupported}>
               {isConnecting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mic className="h-4 w-4 mr-2" />}
               {isConnecting ? "Connecting..." : "Start Browser Test"}
             </Button>
