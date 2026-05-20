@@ -1,13 +1,21 @@
 fastapi
 pydantic
-torch
 numpy
-uvicorn
-transformers
-torchaudio 
+uvicorn 
 onnx 
 onnxruntime 
 onnxruntime-gpu
 pyarr
-
 loguru>=0.7.3
+datasets==2.21.0
+tokenizers==0.20.3
+huggingface_hub==0.23.5
+transformers==4.46.3
+torch==2.8.0 --index-url https://download.pytorch.org/whl/cu129
+torchvision==0.23.0
+torchaudio==2.8.0
+git clone https://github.com/AI4Bharat/NeMo.git
+cd NeMo
+git checkout nemo-v2
+bash reinstall.sh
+python=3.10.12

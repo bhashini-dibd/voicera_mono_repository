@@ -1,0 +1,40 @@
+# ============================================================
+# AI4Bharat STT Server — NVCF / H100 Requirements
+# Python 3.10 | CUDA 12.9 | torch 2.8.0+cu129
+# ============================================================
+# NOTE: The following are handled separately in the Dockerfile
+#   - torch / torchvision / torchaudio  → installed via PyTorch whl index
+#   - AI4Bharat NeMo                    → cloned & built from source
+#   - python version                    → set by base image / apt
+# ============================================================
+
+# --- Web server ---
+fastapi
+uvicorn[standard]
+pydantic
+
+# --- Numerics ---
+numpy
+
+# --- Audio / data ---
+pyarrow
+soundfile
+librosa
+
+# --- ONNX runtime (GPU) ---
+onnx
+onnxruntime-gpu
+
+# --- Logging ---
+loguru>=0.7.3
+
+# --- HuggingFace ecosystem ---
+datasets==2.21.0
+tokenizers==0.20.3
+huggingface_hub==0.23.5
+transformers==4.46.3
+
+# --- Env / utilities ---
+python-dotenv
+requests
+httpx
