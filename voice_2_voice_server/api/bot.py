@@ -108,7 +108,7 @@ class FastPunctuationAggregator(BaseTextAggregator):
         self._text = ""
 
 
-def patch_immediate_first_chunk(transport):
+def patch_immediate_first_chunk(transport, timing_state: Optional[dict] = None):
     """Patch transport to send first audio chunk immediately with zero delay."""
     output = transport.output()
     output._send_interval = 0
@@ -120,6 +120,21 @@ def patch_immediate_first_chunk(transport):
             output._first_chunk_sent = True
             output._next_send_time = time.monotonic() - 0.001
             logger.info(f"🚀 Sending first chunk immediately: {len(frame.audio)} bytes (bypassing queue)")
+            if timing_state is not None:
+                now = time.monotonic()
+                timing_state["first_tts_audio_at"] = now
+                last_user = timing_state.get("last_user_transcript_at")
+                tts_started = timing_state.get("tts_started_at")
+                if last_user is not None:
+                    logger.info(
+                        "Latency | user_transcript_to_first_tts_audio_ms={:.1f}",
+                        (now - last_user) * 1000.0,
+                    )
+                if tts_started is not None:
+                    logger.info(
+                        "Latency | tts_started_to_first_audio_ms={:.1f}",
+                        (now - tts_started) * 1000.0,
+                    )
         await _orig_write(frame)
     output.write_audio_frame = _write_immediate
     
@@ -128,6 +143,14 @@ def patch_immediate_first_chunk(transport):
         if isinstance(frame, TTSStartedFrame):
             output._first_chunk_sent = False
             logger.debug(f"🔄 Reset first_chunk_sent flag for new TTS response")
+            if timing_state is not None:
+                timing_state["tts_started_at"] = time.monotonic()
+                last_user = timing_state.get("last_user_transcript_at")
+                if last_user is not None:
+                    logger.info(
+                        "Latency | user_transcript_to_tts_start_ms={:.1f}",
+                        (timing_state["tts_started_at"] - last_user) * 1000.0,
+                    )
         await _orig_process(frame, direction)
     output.process_frame = _reset_on_tts
 
@@ -140,6 +163,7 @@ async def run_bot(
     handle_sigint: bool = False,
     vad_analyzer: Any = None,
     vistaar_session_id: Optional[str] = None,
+    timing_state: Optional[dict] = None,
 ) -> None:
     """Run the voice bot pipeline with the given configuration.
     
@@ -152,6 +176,8 @@ async def run_bot(
     """
     start_time = time.monotonic()
     sample_rate = _get_sample_rate()
+    if timing_state is not None:
+        timing_state["run_bot_started_at"] = start_time
     
     logger.debug(f"Agent config: {json.dumps(agent_config, indent=2, default=str)}")
     
@@ -177,7 +203,8 @@ async def run_bot(
                 tts_config["language"] = language
 
         org_id = agent_config.get("org_id")
-     
+        stt_provider_name = str(stt_config.get("name") or "").strip().lower()
+        
         llm = create_llm_service(
             llm_config,
             vistaar_session_id=vistaar_session_id,
@@ -186,6 +213,12 @@ async def run_bot(
         )
         stt = create_stt_service(stt_config, sample_rate, vad_analyzer=vad_analyzer, org_id=org_id)
         tts = create_tts_service(tts_config, sample_rate, org_id=org_id)
+        if timing_state is not None:
+            timing_state["services_ready_at"] = time.monotonic()
+            logger.info(
+                "Latency | service_initialization_ms={:.1f}",
+                (timing_state["services_ready_at"] - timing_state["run_bot_started_at"]) * 1000.0,
+            )
         
         # Use fast aggregator (no lookahead/NLTK) for lower latency
         tts._aggregate_sentences = True
@@ -235,6 +268,12 @@ async def run_bot(
         ])
 
         pipeline = Pipeline(pipeline_processors)
+        if timing_state is not None:
+            timing_state["pipeline_built_at"] = time.monotonic()
+            logger.info(
+                "Latency | pipeline_build_ms={:.1f}",
+                (timing_state["pipeline_built_at"] - timing_state["services_ready_at"]) * 1000.0,
+            )
         
         task = PipelineTask(
             pipeline,
@@ -244,6 +283,12 @@ async def run_bot(
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info("Client connected")
+            if timing_state is not None:
+                timing_state["client_connected_at"] = time.monotonic()
+                logger.info(
+                    "Latency | client_connected_after_run_bot_ms={:.1f}",
+                    (timing_state["client_connected_at"] - timing_state["run_bot_started_at"]) * 1000.0,
+                )
             await audiobuffer.start_recording()
             greeting = agent_config.get("greeting_message", '')
             if len(greeting.strip()) > 1:
@@ -270,6 +315,12 @@ async def run_bot(
     finally:
         duration = time.monotonic() - start_time
         logger.info(f"Call ended after {duration:.1f}s")
+        if timing_state is not None:
+            timing_state["run_bot_finished_at"] = time.monotonic()
+            logger.info(
+                "Latency | run_bot_total_ms={:.1f}",
+                (timing_state["run_bot_finished_at"] - timing_state["run_bot_started_at"]) * 1000.0,
+            )
 
 
 async def bot(
@@ -296,6 +347,9 @@ async def bot(
     
     # Track call start time
     call_start_time = time.monotonic()
+    timing_state = {
+        "call_start_at": call_start_time,
+    }
     
     # Initialize MinIO storage
     storage = MinIOStorage.from_env()
@@ -336,23 +390,30 @@ async def bot(
                 sample_rate=sample_rate
             )
         )
-    
-    
-    vad_analyzer = SileroVADAnalyzer(
-        sample_rate=sample_rate,
-        params=VADParams(
-            stop_secs=0.4,
-            min_volume=0.5,
-            confidence=0.4,
-            start_secs=0.1,
+    stt_provider_name = str((agent_config.get("stt_model") or {}).get("name") or "").strip().lower()
+    vad_analyzer = None
+    if stt_provider_name == "bhashini":
+        logger.info("Transport VAD disabled for Bhashini STT because the service performs its own VAD")
+    else:
+        vad_analyzer = SileroVADAnalyzer(
+            sample_rate=sample_rate,
+            params=VADParams(
+                stop_secs=0.4,
+                min_volume=0.5,
+                confidence=0.4,
+                start_secs=0.1,
+            ),
         )
-    )
-    vad_analyzer._smoothing_factor = 0.1  # Faster volume change response
+        vad_analyzer._smoothing_factor = 0.1  # Faster volume change response
+
     import pipecat.transports.base_input
-    pipecat.transports.base_input.AUDIO_INPUT_TIMEOUT_SECS = 0.1
+    # Give the transport more breathing room so short audio gaps do not
+    # force premature stop/start transitions.
+    pipecat.transports.base_input.AUDIO_INPUT_TIMEOUT_SECS = 0.25
 
     import pipecat.transports.base_output
-    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.2
+    # Keep assistant speech grouped together across brief TTS chunk gaps.
+    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.6
     
     transport = FastAPIWebsocketTransport(
         websocket=websocket_client,
@@ -369,7 +430,7 @@ async def bot(
     )
 
     # Optimized first audio chunk sending
-    patch_immediate_first_chunk(transport)
+    patch_immediate_first_chunk(transport, timing_state=timing_state)
     
     # Create audio buffer processor
     audiobuffer = AudioBufferProcessor()
@@ -405,6 +466,20 @@ async def bot(
             line = f"{timestamp}{message.role}: {message.content}"
             logger.info(f"Transcript: {line}")
             call_data["transcript_lines"].append(line)
+            if message.content:
+                now = time.monotonic()
+                if message.role == "user":
+                    timing_state["last_user_transcript_at"] = now
+                    logger.info(
+                        "Latency | user_transcript_received_ms={:.1f}",
+                        (now - call_start_time) * 1000.0,
+                    )
+                elif message.role == "assistant":
+                    timing_state["last_assistant_transcript_at"] = now
+                    logger.info(
+                        "Latency | assistant_transcript_received_ms={:.1f}",
+                        (now - call_start_time) * 1000.0,
+                    )
             if transcript_callback and message.content:
                 try:
                     await transcript_callback(message.role, message.content, message.timestamp)
@@ -412,7 +487,16 @@ async def bot(
                     logger.debug(f"Transcript callback failed: {callback_error}")
     
     try:
-        await run_bot(transport, agent_config, audiobuffer, transcript, handle_sigint=False, vad_analyzer=vad_analyzer, vistaar_session_id=call_sid)
+        await run_bot(
+            transport,
+            agent_config,
+            audiobuffer,
+            transcript,
+            handle_sigint=False,
+            vad_analyzer=vad_analyzer,
+            vistaar_session_id=call_sid,
+            timing_state=timing_state,
+        )
     finally:
         logger.info(f"Saving call data for {call_sid}...")
         if call_data["audio_chunks"] and call_data["audio_sample_rate"] and call_data["audio_num_channels"]:
@@ -475,9 +559,12 @@ async def ubona_bot(
     vad_analyzer._smoothing_factor = 0.1
 
     import pipecat.transports.base_input
-    pipecat.transports.base_input.AUDIO_INPUT_TIMEOUT_SECS = 0.1
+    # Give the transport more breathing room so short audio gaps do not
+    # force premature stop/start transitions.
+    pipecat.transports.base_input.AUDIO_INPUT_TIMEOUT_SECS = 0.25
     import pipecat.transports.base_output
-    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.2
+    # Keep assistant speech grouped together across brief TTS chunk gaps.
+    pipecat.transports.base_output.BOT_VAD_STOP_SECS = 0.6
 
     # Wrapper to handle ping/pong inline
     class PingPongWrapper:
