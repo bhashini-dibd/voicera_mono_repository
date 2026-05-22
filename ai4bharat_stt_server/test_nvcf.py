@@ -52,7 +52,7 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.RawDescriptionHelpFormatter,
     epilog=__doc__,
 )
-parser.add_argument("--url",           default=os.environ.get("NVCF_URL", "http://localhost:8000"),
+parser.add_argument("--url",           default=os.environ.get("NVCF_URL", "http://localhost:8032"),
                     help="Server base URL (default: http://localhost:8000)")
 parser.add_argument("--audio",         default=os.environ.get("TEST_AUDIO_PATH", ""),
                     help="Path to audio file to transcribe")
