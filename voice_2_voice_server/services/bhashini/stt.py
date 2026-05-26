@@ -7,7 +7,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Awaitable, Callable, Optional
 from urllib.parse import quote
 
 import numpy as np
@@ -20,6 +20,8 @@ from pipecat.frames.frames import (
     StartFrame,
     EndFrame,
     CancelFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
     TranscriptionFrame,
 )
 from pipecat.services.stt_service import STTService
@@ -94,6 +96,7 @@ class BhashiniSTTService(STTService):
         input_sample_rate: Optional[int] = None,
         audio_channels: int = 1,
         chunk_ms: int = 200,
+        telemetry_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
@@ -116,6 +119,7 @@ class BhashiniSTTService(STTService):
         self._input_sample_rate = input_sample_rate or sample_rate
         self._audio_channels = audio_channels
         self._chunk_ms = chunk_ms
+        self._telemetry_callback = telemetry_callback
         self._pre_roll_ms = int(os.getenv("BHASHINI_PREROLL_MS", "400"))
         self._chunk_samples = int(self._input_sample_rate * self._chunk_ms / 1000)
         self._chunk_bytes = self._chunk_samples * self._audio_channels * 2
@@ -138,6 +142,7 @@ class BhashiniSTTService(STTService):
         self._closed = False
         self._segment_started_at: Optional[float] = None
         self._segment_ws_opened_at: Optional[float] = None
+        self._speech_started_at: Optional[float] = None
         self._first_transcript_at: Optional[float] = None
         self._segment_finalized_at: Optional[float] = None
 
@@ -151,6 +156,28 @@ class BhashiniSTTService(STTService):
             self._chunk_ms,
             self._pre_roll_ms,
         )
+
+    async def _emit_latency_metric(
+        self,
+        metric: str,
+        value_ms: float,
+        stage: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        if not self._telemetry_callback:
+            return
+        payload = {
+            "service": "stt",
+            "metric": metric,
+            "value_ms": round(float(value_ms), 1),
+            "stage": stage,
+            "details": details or {},
+            "timestamp_monotonic": time.monotonic(),
+        }
+        try:
+            await self._telemetry_callback(payload)
+        except Exception as exc:
+            logger.debug("Bhashini STT telemetry callback failed: {}", exc)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -233,8 +260,14 @@ class BhashiniSTTService(STTService):
             self._segment_started_at = time.monotonic()
             self._segment_ws_opened_at = None
             self._segment_finalized_at = None
+            self._speech_started_at = None
             self._websocket = await websockets.connect(ws_uri, ping_interval=None)
             self._segment_ws_opened_at = time.monotonic()
+            await self._emit_latency_metric(
+                "ws_open_ms",
+                (self._segment_ws_opened_at - self._segment_started_at) * 1000.0,
+                stage="ws_open",
+            )
             await self._send_json(self._get_start_config())
             self._stream_started = True
             self._receiver_task = asyncio.create_task(self._receive_handler())
@@ -284,6 +317,13 @@ class BhashiniSTTService(STTService):
                             (now - self._segment_started_at) * 1000.0,
                             text,
                         )
+                    if self._speech_started_at is not None:
+                        await self._emit_latency_metric(
+                            "first_transcript_ms",
+                            (now - self._speech_started_at) * 1000.0,
+                            stage="first_transcript",
+                            details={"text_preview": text[:80]},
+                        )
 
                 is_final = bool(resp.get("isFinal", False))
                 if is_final:
@@ -294,6 +334,19 @@ class BhashiniSTTService(STTService):
                         if self._segment_started_at
                         else -1.0,
                     )
+                    if self._speech_started_at is not None:
+                        await self._emit_latency_metric(
+                            "final_transcript_ms",
+                            (now - self._speech_started_at) * 1000.0,
+                            stage="final_transcript",
+                            details={"text_preview": text[:80]},
+                        )
+                    if self._speech_started_at is not None:
+                        await self._emit_latency_metric(
+                            "segment_duration_ms",
+                            (now - self._speech_started_at) * 1000.0,
+                            stage="segment_complete",
+                        )
                     if self._final_transcript_event:
                         self._final_transcript_event.set()
                     await self.push_frame(
@@ -366,6 +419,13 @@ class BhashiniSTTService(STTService):
                             (time.monotonic() - self._segment_started_at) * 1000.0,
                             self._latest_transcript_text,
                         )
+                    if self._speech_started_at is not None:
+                        await self._emit_latency_metric(
+                            "final_transcript_ms",
+                            (time.monotonic() - self._speech_started_at) * 1000.0,
+                            stage="final_transcript_fallback",
+                            details={"text_preview": self._latest_transcript_text[:80]},
+                        )
                     await self.push_frame(
                         TranscriptionFrame(
                             text=self._latest_transcript_text,
@@ -374,28 +434,32 @@ class BhashiniSTTService(STTService):
                         )
                     )
 
-    async def _handle_audio_chunk(self, audio_chunk: bytes, pre_roll_bytes: bytes = b"") -> None:
+    async def _handle_audio_chunk(self, audio_chunk: bytes, pre_roll_bytes: bytes = b"") -> str:
         state = self._vad.process_chunk(audio_chunk)
 
         if state == "START":
             logger.debug("Bhashini VAD detected speech start")
             if not await self._open_websocket():
-                return
+                return "START_FAILED"
             self._segment_active = True
+            self._speech_started_at = time.monotonic()
             if pre_roll_bytes:
                 logger.debug("Sending pre-roll buffer to Bhashini | bytes={}", len(pre_roll_bytes))
                 await self._send_audio(pre_roll_bytes)
             await self._send_audio(audio_chunk)
-            return
+            return "START"
 
         if state == "CONTINUE" and self._segment_active:
             await self._send_audio(audio_chunk)
-            return
+            return "CONTINUE"
 
         if state == "STOP":
             logger.debug("Bhashini VAD detected speech stop")
             await self._finalize_segment()
             await self._close_websocket()
+            return "STOP"
+
+        return state
 
     # ------------------------------------------------------------------
     # STTService implementation
@@ -433,6 +497,7 @@ class BhashiniSTTService(STTService):
             self._disabled = False
             self._segment_started_at = None
             self._segment_ws_opened_at = None
+            self._speech_started_at = None
             self._first_transcript_at = None
             self._segment_finalized_at = None
             await super().stop(frame)
@@ -454,6 +519,7 @@ class BhashiniSTTService(STTService):
             self._disabled = False
             self._segment_started_at = None
             self._segment_ws_opened_at = None
+            self._speech_started_at = None
             self._first_transcript_at = None
             self._segment_finalized_at = None
             await super().cancel(frame)
@@ -469,7 +535,11 @@ class BhashiniSTTService(STTService):
             chunk = bytes(self._audio_buffer[: self._chunk_bytes])
             del self._audio_buffer[: self._chunk_bytes]
             try:
-                await self._handle_audio_chunk(chunk, pre_roll_snapshot)
+                vad_state = await self._handle_audio_chunk(chunk, pre_roll_snapshot)
+                if vad_state == "START":
+                    yield UserStartedSpeakingFrame()
+                elif vad_state == "STOP":
+                    yield UserStoppedSpeakingFrame()
             except Exception as e:
                 if "received 1000 (OK); then sent 1000 (OK)" in str(e):
                     logger.debug("Bhashini websocket closed normally between audio chunks")

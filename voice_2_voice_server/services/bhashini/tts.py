@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import AsyncGenerator
+import time
+from typing import AsyncGenerator, Awaitable, Callable, Optional
 
 import numpy as np
 import tritonclient.grpc as grpcclient
@@ -104,9 +105,11 @@ class BhashiniTTSService(TTSService):
         speaker: str = "Divya",
         description: str = "A clear, natural voice with good audio quality.",
         sample_rate: int = 44100,
+        telemetry_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
         **kwargs,
     ):
         super().__init__(sample_rate=sample_rate, **kwargs)
+        self._telemetry_callback = telemetry_callback
 
         # --- Connection config from .env ---
         logger.info("TTS [INIT] Step 1/3 — Reading required environment variables")
@@ -155,6 +158,28 @@ class BhashiniTTSService(TTSService):
             self._triton_url, self._model_name, self._use_tls, self._timeout_s,
         )
 
+    async def _emit_latency_metric(
+        self,
+        metric: str,
+        value_ms: float,
+        stage: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
+        if not self._telemetry_callback:
+            return
+        payload = {
+            "service": "tts",
+            "metric": metric,
+            "value_ms": round(float(value_ms), 1),
+            "stage": stage,
+            "details": details or {},
+            "timestamp_monotonic": time.monotonic(),
+        }
+        try:
+            await self._telemetry_callback(payload)
+        except Exception as exc:
+            logger.debug("TTS telemetry callback failed: {}", exc)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -185,6 +210,14 @@ class BhashiniTTSService(TTSService):
         if not text.strip():
             logger.warning("TTS [RUN] Empty text received — skipping TTS call")
             return
+
+        started_at = time.perf_counter()
+        await self._emit_latency_metric(
+            "request_started",
+            0.0,
+            stage="run_tts",
+            details={"text_len": len(text)},
+        )
 
         loop = asyncio.get_event_loop()
         result_queue: asyncio.Queue = asyncio.Queue()
@@ -299,6 +332,13 @@ class BhashiniTTSService(TTSService):
                         "TTS [RUN] 🔊 Audio chunk #{} | {} bytes | sample_rate={}Hz dtype={}",
                         chunk_count, len(pcm_bytes), self.sample_rate, str(audio_chunk.dtype),
                     )
+                    if chunk_count == 1:
+                        await self._emit_latency_metric(
+                            "ttft_ms",
+                            (time.perf_counter() - started_at) * 1000.0,
+                            stage="first_audio_chunk",
+                            details={"chunk_count": chunk_count, "text_len": len(text)},
+                        )
                     yield TTSAudioRawFrame(
                         audio=pcm_bytes,
                         sample_rate=self.sample_rate,
@@ -318,6 +358,12 @@ class BhashiniTTSService(TTSService):
                             "TTS [RUN] ✅ Step 4/5 — Stream complete | total_chunks={} text_len={}",
                             chunk_count, len(text),
                         )
+                    await self._emit_latency_metric(
+                        "stream_complete_ms",
+                        (time.perf_counter() - started_at) * 1000.0,
+                        stage="stream_complete",
+                        details={"chunk_count": chunk_count, "text_len": len(text)},
+                    )
                     break
 
             # Step 5: Done

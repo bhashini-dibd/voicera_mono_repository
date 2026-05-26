@@ -64,6 +64,7 @@ async def submit_call_recording(
     agent_config: dict,
     storage: MinIOStorage,
     call_start_time: float,
+    latency_summary: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Submit call recording data to the backend API after a call ends.
@@ -103,6 +104,7 @@ async def submit_call_recording(
             "agent_type": agent_type,
             "call_duration": call_duration,
             "end_time_utc": end_time_utc,
+            "latency_summary": latency_summary,
         }
 
         if "org_id" in agent_config:

@@ -10,12 +10,18 @@ from dotenv import load_dotenv
 
 
 
-from pipecat.frames.frames import TTSSpeakFrame, TTSStartedFrame
+from pipecat.frames.frames import (
+    InterruptionFrame,
+    TTSSpeakFrame,
+    TTSStartedFrame,
+    UserStartedSpeakingFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
 from pipecat.processors.audio.audio_buffer_processor import AudioBufferProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.transcript_processor import TranscriptProcessor
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -36,6 +42,7 @@ from .services import (
     create_tts_service,
     ServiceCreationError,
 )
+from .latency_utils import build_latency_summary, record_latency_metric
 # Import the new filter
 from services.audio.greeting_interruption_filter import GreetingInterruptionFilter
 from services.audio.marathi_idle_prompt_filter import MarathiIdlePromptFilter
@@ -108,6 +115,19 @@ class FastPunctuationAggregator(BaseTextAggregator):
         self._text = ""
 
 
+class BargeInInterruptionProcessor(FrameProcessor):
+    """Emit a transport clear when the user starts speaking."""
+
+    async def process_frame(self, frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, UserStartedSpeakingFrame):
+            logger.debug("User started speaking - clearing assistant audio")
+            await self.push_frame(InterruptionFrame(), direction)
+
+        await self.push_frame(frame, direction)
+
+
 def patch_immediate_first_chunk(transport, timing_state: Optional[dict] = None):
     """Patch transport to send first audio chunk immediately with zero delay."""
     output = transport.output()
@@ -126,11 +146,25 @@ def patch_immediate_first_chunk(transport, timing_state: Optional[dict] = None):
                 last_user = timing_state.get("last_user_transcript_at")
                 tts_started = timing_state.get("tts_started_at")
                 if last_user is not None:
+                    record_latency_metric(
+                        timing_state,
+                        service="orchestrator",
+                        metric="user_transcript_to_first_tts_audio_ms",
+                        value_ms=(now - last_user) * 1000.0,
+                        stage="first_tts_audio",
+                    )
                     logger.info(
                         "Latency | user_transcript_to_first_tts_audio_ms={:.1f}",
                         (now - last_user) * 1000.0,
                     )
                 if tts_started is not None:
+                    record_latency_metric(
+                        timing_state,
+                        service="orchestrator",
+                        metric="tts_started_to_first_audio_ms",
+                        value_ms=(now - tts_started) * 1000.0,
+                        stage="first_tts_audio",
+                    )
                     logger.info(
                         "Latency | tts_started_to_first_audio_ms={:.1f}",
                         (now - tts_started) * 1000.0,
@@ -147,6 +181,13 @@ def patch_immediate_first_chunk(transport, timing_state: Optional[dict] = None):
                 timing_state["tts_started_at"] = time.monotonic()
                 last_user = timing_state.get("last_user_transcript_at")
                 if last_user is not None:
+                    record_latency_metric(
+                        timing_state,
+                        service="orchestrator",
+                        metric="user_transcript_to_tts_start_ms",
+                        value_ms=(timing_state["tts_started_at"] - last_user) * 1000.0,
+                        stage="tts_start",
+                    )
                     logger.info(
                         "Latency | user_transcript_to_tts_start_ms={:.1f}",
                         (timing_state["tts_started_at"] - last_user) * 1000.0,
@@ -164,6 +205,7 @@ async def run_bot(
     vad_analyzer: Any = None,
     vistaar_session_id: Optional[str] = None,
     timing_state: Optional[dict] = None,
+    latency_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
 ) -> None:
     """Run the voice bot pipeline with the given configuration.
     
@@ -210,9 +252,21 @@ async def run_bot(
             vistaar_session_id=vistaar_session_id,
             language=agent_config.get("language"),
             org_id=org_id,
+            telemetry_callback=latency_callback,
         )
-        stt = create_stt_service(stt_config, sample_rate, vad_analyzer=vad_analyzer, org_id=org_id)
-        tts = create_tts_service(tts_config, sample_rate, org_id=org_id)
+        stt = create_stt_service(
+            stt_config,
+            sample_rate,
+            vad_analyzer=vad_analyzer,
+            org_id=org_id,
+            telemetry_callback=latency_callback,
+        )
+        tts = create_tts_service(
+            tts_config,
+            sample_rate,
+            org_id=org_id,
+            telemetry_callback=latency_callback,
+        )
         if timing_state is not None:
             timing_state["services_ready_at"] = time.monotonic()
             logger.info(
@@ -253,6 +307,7 @@ async def run_bot(
             transport.input(),
             greeting_filter,
             stt,
+            BargeInInterruptionProcessor(),
             transcript.user(),
             context_aggregator.user(),
             llm,
@@ -331,6 +386,7 @@ async def bot(
     agent_config: dict,
     provider: str = "vobiz",
     transcript_callback: Optional[Callable[[str, str, Optional[str]], Awaitable[None]]] = None,
+    metrics_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
 ) -> str:
     """Main bot entry point - sets up transport and runs the pipeline."""
     sample_rate = _get_sample_rate()
@@ -350,6 +406,22 @@ async def bot(
     timing_state = {
         "call_start_at": call_start_time,
     }
+
+    async def emit_latency_metric(entry: dict) -> None:
+        if timing_state is not None:
+            record_latency_metric(
+                timing_state,
+                service=str(entry.get("service") or "unknown"),
+                metric=str(entry.get("metric") or "unknown"),
+                value_ms=float(entry.get("value_ms") or 0.0),
+                stage=entry.get("stage"),
+                details=entry.get("details") or {},
+            )
+        if metrics_callback:
+            try:
+                await metrics_callback(entry)
+            except Exception as callback_error:
+                logger.debug(f"Latency callback failed: {callback_error}")
     
     # Initialize MinIO storage
     storage = MinIOStorage.from_env()
@@ -496,6 +568,7 @@ async def bot(
             vad_analyzer=vad_analyzer,
             vistaar_session_id=call_sid,
             timing_state=timing_state,
+            latency_callback=emit_latency_metric,
         )
     finally:
         logger.info(f"Saving call data for {call_sid}...")
@@ -522,13 +595,29 @@ async def bot(
                 logger.error(f" Failed to save transcript: {e}")
         else:
             logger.warning(f"No transcript data to save for {call_sid}")
+
+        latency_summary = build_latency_summary(timing_state)
+        if timing_state is not None:
+            timing_state["latency_summary"] = latency_summary
+        if metrics_callback:
+            try:
+                await metrics_callback(
+                    {
+                        "event": "latency_summary",
+                        "call_sid": call_sid,
+                        "summary": latency_summary,
+                    }
+                )
+            except Exception as callback_error:
+                logger.debug(f"Latency summary callback failed: {callback_error}")
         
         await submit_call_recording(
             call_sid=call_sid,
             agent_type=agent_type,
             agent_config=agent_config,
             storage=storage,
-            call_start_time=call_start_time
+            call_start_time=call_start_time,
+            latency_summary=latency_summary,
         )
     return call_sid
 

@@ -58,6 +58,7 @@ def create_llm_service(
     vistaar_session_id: Optional[str] = None,
     language: Optional[str] = None,
     org_id: Optional[str] = None,
+    telemetry_callback: Optional[Any] = None,
 ) -> Any:
     """Create an LLM service based on configuration.
 
@@ -139,6 +140,7 @@ def create_llm_service(
         return KenpathLLM(
             vistaar_session_id=vistaar_session_id,
             language=language,
+            telemetry_callback=telemetry_callback,
         )
     elif provider_normalized in ("Anthropic", "anthropic"):
         if not org_id:
@@ -250,6 +252,7 @@ def create_stt_service(
     sample_rate: int,
     vad_analyzer: Any = None,
     org_id: Optional[str] = None,
+    telemetry_callback: Optional[Any] = None,
 ) -> Any:
     """Create an STT service based on configuration.
     
@@ -405,6 +408,7 @@ def create_stt_service(
             service_id=args.get("model", "bhashini/ai4b/indic-conformer/grpc"),
             sample_rate=sample_rate,
             input_sample_rate=sample_rate,
+            telemetry_callback=telemetry_callback,
         )
     
     elif provider == "Sarvam":
@@ -433,6 +437,7 @@ def create_tts_service(
     tts_config: dict,
     sample_rate: int,
     org_id: Optional[str] = None,
+    telemetry_callback: Optional[Any] = None,
 ) -> Any:
     """Create a TTS service based on configuration.
     
@@ -579,7 +584,8 @@ def create_tts_service(
         return BhashiniTTSService(
             speaker=speaker,
             description=description,
-            sample_rate=44100
+            sample_rate=44100,
+            telemetry_callback=telemetry_callback,
         )
     
     elif provider == "Sarvam":

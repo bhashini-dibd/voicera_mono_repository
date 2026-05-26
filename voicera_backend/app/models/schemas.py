@@ -119,6 +119,7 @@ class MeetingResponse(BaseModel):
     transcript_content: Optional[str] = None
     transcript: Optional[List[Dict[str, Any]]] = None
     llm_responses: Optional[List[Dict[str, Any]]] = None
+    latency_summary: Optional[Dict[str, Any]] = None
     call_busy: Optional[bool] = None    
 
 class MeetingUpdate(BaseModel):
@@ -187,6 +188,7 @@ class CallRecordingCreate(BaseModel):
     transcript_url: str
     transcript_content: Optional[str] = None
     llm_responses: Optional[List[Dict[str, Any]]] = None
+    latency_summary: Optional[Dict[str, Any]] = None
     agent_type: str
     call_duration: Optional[float] = None
     end_time_utc: Optional[str] = None
@@ -199,6 +201,7 @@ class CallRecordingResponse(BaseModel):
     transcript_url: Optional[str] = None
     transcript_content: Optional[str] = None
     llm_responses: Optional[List[Dict[str, Any]]] = None
+    latency_summary: Optional[Dict[str, Any]] = None
     agent_type: Optional[str] = None
     call_duration: Optional[float] = None
     start_time_utc: Optional[str] = None

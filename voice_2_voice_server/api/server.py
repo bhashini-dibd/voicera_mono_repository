@@ -390,6 +390,16 @@ async def browser_websocket_endpoint(websocket: WebSocket, agent_id: str):
                 )
             )
 
+        async def send_metric(payload: dict):
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "event": "latency",
+                        **payload,
+                    }
+                )
+            )
+
         await bot(
             websocket,
             stream_sid,
@@ -397,6 +407,7 @@ async def browser_websocket_endpoint(websocket: WebSocket, agent_id: str):
             agent_type,
             agent_config,
             transcript_callback=send_transcript,
+            metrics_callback=send_metric,
         )
 
     except FileNotFoundError as e:

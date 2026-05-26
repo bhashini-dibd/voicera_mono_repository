@@ -8,7 +8,7 @@ import asyncio
 import codecs
 import jwt
 import time
-from typing import Iterator, Optional
+from typing import Awaitable, Callable, Iterator, Optional
 from pathlib import Path
 import uuid
 import os
@@ -40,11 +40,13 @@ class KenpathLLM(OpenAILLMService):
         self,
         vistaar_session_id: Optional[str] = None,
         language: Optional[str] = None,
+        telemetry_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.response_timeout = 1.0  # seconds
         self._vistaar_session_id = vistaar_session_id
+        self._telemetry_callback = telemetry_callback
 
         # JWT config
         self._private_key = Path(os.environ["KENPATH_JWT_PRIVATE_KEY_PATH"]).read_text()
@@ -94,6 +96,22 @@ class KenpathLLM(OpenAILLMService):
         if self._vistaar_session_id:
             logger.info(f"📞 Vistaar session ID for this call: {self._vistaar_session_id}")
 
+    async def _emit_latency_metric(self, metric: str, value_ms: float, stage: Optional[str] = None, details: Optional[dict] = None) -> None:
+        if not self._telemetry_callback:
+            return
+        payload = {
+            "service": "llm",
+            "metric": metric,
+            "value_ms": round(float(value_ms), 1),
+            "stage": stage,
+            "details": details or {},
+            "timestamp_monotonic": time.monotonic(),
+        }
+        try:
+            await self._telemetry_callback(payload)
+        except Exception as exc:
+            logger.debug(f"LLM telemetry callback failed: {exc}")
+
     def _generate_jwt(self) -> str:
         """Generate a fresh JWT token (local operation, ~microseconds)."""
         now = int(time.time())
@@ -136,6 +154,12 @@ class KenpathLLM(OpenAILLMService):
             return
 
         logger.info(f"💬 Processing: '{user_message[:50]}...'")
+        await self._emit_latency_metric(
+            "request_started",
+            0.0,
+            stage="process_context",
+            details={"user_message_preview": user_message[:80]},
+        )
 
         # Simple flag to track if first chunk arrived
         first_chunk_arrived = asyncio.Event()
@@ -175,11 +199,23 @@ class KenpathLLM(OpenAILLMService):
                     elapsed = time.perf_counter() - start_time
                     logger.info(f"🚀 First chunk received at {elapsed:.2f}s")
                     first_chunk_arrived.set()
+                    await self._emit_latency_metric(
+                        "ttft_ms",
+                        elapsed * 1000.0,
+                        stage="first_chunk",
+                        details={"chunk_count": chunk_count + 1},
+                    )
 
                 await self.push_frame(LLMTextFrame(text=chunk))
                 chunk_count += 1
 
             logger.info(f"✅ Completed - {chunk_count} chunks streamed")
+            await self._emit_latency_metric(
+                "stream_complete_ms",
+                (time.perf_counter() - start_time) * 1000.0,
+                stage="stream_complete",
+                details={"chunk_count": chunk_count},
+            )
 
         except Exception as e:
             logger.error(f"❌ Error: {e}")

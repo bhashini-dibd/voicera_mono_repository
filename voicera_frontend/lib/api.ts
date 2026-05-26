@@ -602,6 +602,7 @@ export interface Meeting {
   transcript_content?: string
   transcript?: TranscriptMessage[]  // Parsed transcript from backend
   llm_responses?: LLMResponseMessage[]
+  latency_summary?: Record<string, any>
   duration?: number
   call_busy?: boolean
 }

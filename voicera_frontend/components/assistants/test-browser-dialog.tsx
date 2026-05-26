@@ -239,6 +239,15 @@ export function TestBrowserDialog({
   const [error, setError] = useState("")
   const [orbState, setOrbState] = useState<OrbAgentState>(null)
   const [transcripts, setTranscripts] = useState<Array<{ id: string; role: "user" | "assistant"; content: string }>>([])
+  const [latencyEvents, setLatencyEvents] = useState<Array<{
+    id: string
+    service: string
+    metric: string
+    value_ms: number
+    stage?: string | null
+    details?: Record<string, any>
+  }>>([])
+  const [latencySummary, setLatencySummary] = useState<Record<string, any> | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
   const isMutedRef = useRef(false)
@@ -361,6 +370,8 @@ export function TestBrowserDialog({
     setIsConnecting(true)
     sessionIdRef.current = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setTranscripts([])
+    setLatencyEvents([])
+    setLatencySummary(null)
 
     try {
       const stream = await requestMicrophoneStream()
@@ -449,6 +460,22 @@ export function TestBrowserDialog({
               const merged = [...prev, next]
               return merged.length > 120 ? merged.slice(merged.length - 120) : merged
             })
+          } else if (msg?.event === "latency" && msg?.metric) {
+            const metricValue = Number(msg?.value_ms)
+            const entry = {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              service: String(msg.service || "unknown"),
+              metric: String(msg.metric || "unknown"),
+              value_ms: Number.isFinite(metricValue) ? metricValue : 0,
+              stage: msg.stage ? String(msg.stage) : null,
+              details: (msg.details && typeof msg.details === "object") ? msg.details : undefined,
+            }
+            setLatencyEvents((prev) => {
+              const merged = [...prev, entry]
+              return merged.length > 80 ? merged.slice(merged.length - 80) : merged
+            })
+          } else if (msg?.event === "latency_summary" && msg?.summary) {
+            setLatencySummary(msg.summary)
           }
         } catch {
           // Ignore malformed frames.
@@ -582,6 +609,49 @@ export function TestBrowserDialog({
           )}
           {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
         </div>
+
+        {(latencyEvents.length > 0 || latencySummary) && (
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-900">Latency Feed</h3>
+              <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                {latencyEvents.length} events
+              </span>
+            </div>
+            {latencySummary && (
+              <div className="mb-4 grid grid-cols-1 gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-700 md:grid-cols-2">
+                <div>Call total: {latencySummary.call?.run_bot_total_ms ?? "N/A"} ms</div>
+                <div>Service init: {latencySummary.call?.service_initialization_ms ?? "N/A"} ms</div>
+                <div>STT TTFT: {latencySummary.stt?.first_transcript_ms ?? "N/A"} ms</div>
+                <div>LLM TTFT: {latencySummary.llm?.ttft_ms ?? "N/A"} ms</div>
+                <div>TTS TTFT: {latencySummary.tts?.ttft_ms ?? "N/A"} ms</div>
+                <div>Orchestrator gap: {latencySummary.orchestrator?.user_transcript_to_first_tts_audio_ms ?? "N/A"} ms</div>
+              </div>
+            )}
+            <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2">Service</th>
+                    <th className="px-3 py-2">Metric</th>
+                    <th className="px-3 py-2">Value</th>
+                    <th className="px-3 py-2">Stage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {latencyEvents.slice().reverse().map((event) => (
+                    <tr key={event.id} className="border-t border-slate-100">
+                      <td className="px-3 py-2 font-medium text-slate-800">{event.service}</td>
+                      <td className="px-3 py-2 text-slate-700">{event.metric}</td>
+                      <td className="px-3 py-2 text-slate-700">{event.value_ms.toFixed(1)} ms</td>
+                      <td className="px-3 py-2 text-slate-500">{event.stage || "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         <DialogFooter className="gap-2 justify-center sm:justify-center">
           {!isConnected ? (

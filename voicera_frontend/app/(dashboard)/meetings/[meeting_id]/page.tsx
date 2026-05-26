@@ -80,6 +80,14 @@ export default function MeetingDetailPage() {
     }
   }
 
+  const latencySummary = meeting?.latency_summary as Record<string, any> | undefined
+
+  const formatLatencyValue = (value: any) => {
+    if (typeof value === "number") return `${value.toFixed(1)} ms`
+    if (value === null || value === undefined || value === "") return "N/A"
+    return String(value)
+  }
+
   return (
     <div className="flex flex-col h-screen bg-slate-50/50">
       {/* Header */}
@@ -257,6 +265,31 @@ export default function MeetingDetailPage() {
                         </div>
                       )}
                     </div>
+                    {latencySummary && (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <h3 className="mb-3 text-sm font-semibold text-slate-900">Latency Summary</h3>
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                          <div>
+                            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Call</p>
+                            <div className="space-y-1 text-sm text-slate-700">
+                              <div>Run total: {formatLatencyValue(latencySummary.call?.run_bot_total_ms)}</div>
+                              <div>Service init: {formatLatencyValue(latencySummary.call?.service_initialization_ms)}</div>
+                              <div>Pipeline build: {formatLatencyValue(latencySummary.call?.pipeline_build_ms)}</div>
+                              <div>Client connected: {formatLatencyValue(latencySummary.call?.client_connected_after_run_bot_ms)}</div>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Service TTFT</p>
+                            <div className="space-y-1 text-sm text-slate-700">
+                              <div>STT first transcript: {formatLatencyValue(latencySummary.stt?.first_transcript_ms)}</div>
+                              <div>LLM TTFT: {formatLatencyValue(latencySummary.llm?.ttft_ms)}</div>
+                              <div>TTS TTFT: {formatLatencyValue(latencySummary.tts?.ttft_ms)}</div>
+                              <div>Orchestrator gap: {formatLatencyValue(latencySummary.orchestrator?.user_transcript_to_first_tts_audio_ms)}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </TabsContent>
