@@ -119,23 +119,44 @@ class FastPunctuationAggregator(BaseTextAggregator):
 
 
 class BargeInInterruptionProcessor(FrameProcessor):
-    """Interrupt the bot when the user speaks, with two lines of defence against noise.
+    """Smart barge-in: interrupt bot only on real human speech, never on noise.
 
-    Layer 1 — SileroVAD (transport level):
-        SileroVADAnalyzer is a neural speech classifier.  It scores each 30 ms
-        audio window with a speech probability and only fires
-        UserStartedSpeakingFrame when confidence >= 0.7 (configured in bot()).
-        Coughs, dog barks, and background noise typically score < 0.4 and are
-        silently ignored — the bot never even knows they happened.
+    This applies identically during the greeting AND during normal conversation.
 
-    Layer 2 — Transcript gate (this processor):
-        Even if a stray sound somehow passes Silero, we do NOT interrupt
-        until Bhashini returns at least one InterimTranscriptionFrame with
-        real text.  If no transcript arrives before UserStoppedSpeakingFrame
-        the interrupt is quietly discarded.
+    Three-layer noise filter
+    ────────────────────────
+    Layer 1 — SileroVAD (neural, transport level)
+        Runs a trained speech/non-speech classifier on every 30 ms audio window.
+        confidence=0.7 means the audio must be 70%+ speech-like before
+        UserStartedSpeakingFrame is emitted.
+        • Cough   → typically scores 0.1–0.3  → SILENT, no frame ✓
+        • Dog bark → typically scores 0.1–0.25 → SILENT, no frame ✓
+        • Background noise → scores ~0.0       → SILENT, no frame ✓
+        • Human speech     → scores 0.8–1.0    → UserStartedSpeakingFrame ✓
 
-    Net result: the bot is interrupted only when the user actually speaks words.
+    Layer 2 — Speaking guard (_user_speaking flag)
+        BargeInInterruptionProcessor only arms itself when it sees
+        UserStartedSpeakingFrame (i.e. Silero approved the audio).
+        If Silero was silent, _user_speaking stays False and no barge-in
+        can fire — even if Bhashini's internal energy VAD happened to
+        open a WebSocket and send the cough audio to the ASR server.
+
+    Layer 3 — Transcript gate + minimum length
+        Even with both layers above passed, we wait for Bhashini to return
+        a real interim transcript with ≥ 3 characters.  A very loud cough
+        that somehow slips Silero might produce 1–2 garbage characters;
+        this gate discards those silently.  Real speech produces ≥ 3 chars.
+
+    Result (both greeting and conversation):
+        Human speaks   → all 3 layers pass → bot stops, listens   ✓
+        Human coughs   → Layer 1 rejects   → bot keeps speaking   ✓
+        Dog barks      → Layer 1 rejects   → bot keeps speaking   ✓
+        Background noise → Layer 1 rejects → bot keeps speaking   ✓
     """
+
+    # Minimum transcript character count to treat as real speech.
+    # Raised from 1 to avoid single-character ASR artefacts from loud coughs.
+    MIN_TEXT_CHARS = 3
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -146,23 +167,26 @@ class BargeInInterruptionProcessor(FrameProcessor):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, UserStartedSpeakingFrame):
+            # Layer 1 passed: Silero confirmed speech-like audio.
             self._user_speaking = True
             self._interrupted = False
-            logger.debug(
-                "Silero: user speech detected — waiting for first transcript before barge-in"
-            )
+            logger.debug("Silero: speech detected — armed, waiting for transcript")
 
         elif isinstance(frame, UserStoppedSpeakingFrame):
+            # Speech segment ended without a valid transcript → disarm quietly.
+            if self._user_speaking and not self._interrupted:
+                logger.debug("Silero: speech ended with no valid transcript — no barge-in")
             self._user_speaking = False
             self._interrupted = False
 
         elif isinstance(frame, (InterimTranscriptionFrame, TranscriptionFrame)):
-            # Only interrupt once per speech segment, and only for non-empty text.
-            if not self._interrupted and frame.text.strip():
+            text = frame.text.strip()
+            # Layers 2 + 3: Silero must have armed us AND text must be long enough.
+            if self._user_speaking and not self._interrupted and len(text) >= self.MIN_TEXT_CHARS:
                 self._interrupted = True
                 logger.debug(
-                    "Barge-in confirmed (Silero + transcript) — text='{}' — interrupting bot",
-                    frame.text[:80],
+                    "Barge-in confirmed (Silero + transcript '{}') — interrupting bot",
+                    text[:80],
                 )
                 await self.push_frame(InterruptionFrame(), direction)
 
@@ -331,7 +355,10 @@ async def run_bot(
         else:
             context_aggregator = llm.create_context_aggregator(context)
         
-        greeting_filter = GreetingInterruptionFilter()
+        # GreetingInterruptionFilter removed: Silero VAD (confidence=0.7) +
+        # transcript gate in BargeInInterruptionProcessor already reject noise
+        # (coughs, barks, background) without blocking real human speech.
+        # Keeping the filter would prevent legitimate user barge-in on greeting.
         language_normalized = str(language or "").strip().lower()
         marathi_idle_prompt_enabled = (
             language_normalized == "marathi"
@@ -346,7 +373,6 @@ async def run_bot(
 
         pipeline_processors = [
             transport.input(),
-            greeting_filter,
             stt,
             BargeInInterruptionProcessor(),
             transcript.user(),
@@ -389,7 +415,6 @@ async def run_bot(
             greeting = agent_config.get("greeting_message", '')
             if len(greeting.strip()) > 1:
                 logger.info(f"greeting: {greeting}")
-                greeting_filter.start_greeting()
                 await task.queue_frames([TTSSpeakFrame(greeting)])
         
         @transport.event_handler("on_client_disconnected")
