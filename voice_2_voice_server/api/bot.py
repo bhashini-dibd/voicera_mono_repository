@@ -12,9 +12,12 @@ from dotenv import load_dotenv
 
 from pipecat.frames.frames import (
     InterruptionFrame,
+    InterimTranscriptionFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
     TTSStartedFrame,
     UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -116,14 +119,52 @@ class FastPunctuationAggregator(BaseTextAggregator):
 
 
 class BargeInInterruptionProcessor(FrameProcessor):
-    """Emit a transport clear when the user starts speaking."""
+    """Interrupt the bot when the user speaks, with two lines of defence against noise.
+
+    Layer 1 — SileroVAD (transport level):
+        SileroVADAnalyzer is a neural speech classifier.  It scores each 30 ms
+        audio window with a speech probability and only fires
+        UserStartedSpeakingFrame when confidence >= 0.7 (configured in bot()).
+        Coughs, dog barks, and background noise typically score < 0.4 and are
+        silently ignored — the bot never even knows they happened.
+
+    Layer 2 — Transcript gate (this processor):
+        Even if a stray sound somehow passes Silero, we do NOT interrupt
+        until Bhashini returns at least one InterimTranscriptionFrame with
+        real text.  If no transcript arrives before UserStoppedSpeakingFrame
+        the interrupt is quietly discarded.
+
+    Net result: the bot is interrupted only when the user actually speaks words.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._user_speaking: bool = False
+        self._interrupted: bool = False
 
     async def process_frame(self, frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
         if isinstance(frame, UserStartedSpeakingFrame):
-            logger.debug("User started speaking - clearing assistant audio")
-            await self.push_frame(InterruptionFrame(), direction)
+            self._user_speaking = True
+            self._interrupted = False
+            logger.debug(
+                "Silero: user speech detected — waiting for first transcript before barge-in"
+            )
+
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            self._user_speaking = False
+            self._interrupted = False
+
+        elif isinstance(frame, (InterimTranscriptionFrame, TranscriptionFrame)):
+            # Only interrupt once per speech segment, and only for non-empty text.
+            if not self._interrupted and frame.text.strip():
+                self._interrupted = True
+                logger.debug(
+                    "Barge-in confirmed (Silero + transcript) — text='{}' — interrupting bot",
+                    frame.text[:80],
+                )
+                await self.push_frame(InterruptionFrame(), direction)
 
         await self.push_frame(frame, direction)
 
@@ -463,9 +504,29 @@ async def bot(
             )
         )
     stt_provider_name = str((agent_config.get("stt_model") or {}).get("name") or "").strip().lower()
-    vad_analyzer = None
+
     if stt_provider_name == "bhashini":
-        logger.info("Transport VAD disabled for Bhashini STT because the service performs its own VAD")
+        # Use Silero VAD (neural speech classifier) on the transport even for
+        # Bhashini.  Silero correctly ignores coughs, dog barks, background
+        # noise and only fires UserStartedSpeakingFrame for real human speech.
+        # Bhashini's internal energy VAD still manages WebSocket open/close
+        # timing but will NOT emit duplicate speaking frames (suppress_vad_frames
+        # is set True in services.py when vad_analyzer is not None).
+        vad_analyzer = SileroVADAnalyzer(
+            sample_rate=sample_rate,
+            params=VADParams(
+                stop_secs=0.5,     # 500 ms of silence ends the speech segment
+                min_volume=0.6,    # ignore very quiet background hiss
+                confidence=0.7,    # neural confidence threshold (0–1); coughs/barks
+                                   # typically score < 0.4, real speech > 0.7
+                start_secs=0.2,    # require 200 ms of sustained speech onset
+            ),
+        )
+        vad_analyzer._smoothing_factor = 0.15
+        logger.info(
+            "Bhashini: using SileroVAD on transport for barge-in "
+            "(confidence=0.7, min_volume=0.6) — coughs/barks will be ignored"
+        )
     else:
         vad_analyzer = SileroVADAnalyzer(
             sample_rate=sample_rate,

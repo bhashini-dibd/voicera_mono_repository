@@ -402,12 +402,16 @@ def create_stt_service(
         )
         if not api_key and org_id:
             api_key = fetch_integration_key(org_id, "Bhashini")
+        # When a vad_analyzer is provided the transport (SileroVAD) emits
+        # UserStarted/StoppedSpeakingFrame itself, so Bhashini's internal
+        # energy-based VAD must not emit duplicate frames.
         return BhashiniSTTService(
             api_key=api_key,
             language=STT_LANGUAGE_MAP[provider][language],
             service_id=args.get("model", "bhashini/ai4b/indic-conformer/grpc"),
             sample_rate=sample_rate,
             input_sample_rate=sample_rate,
+            suppress_vad_frames=(vad_analyzer is not None),
             telemetry_callback=telemetry_callback,
         )
     

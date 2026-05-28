@@ -37,11 +37,29 @@ except ModuleNotFoundError as e:
 
 @dataclass
 class VADProcessor:
-    """Simple energy-based VAD matching the reference Bhashini client."""
+    """Simple energy-based VAD matching the reference Bhashini client.
 
-    speech_start_rms: float = 0.024
+    Threshold notes
+    ---------------
+    speech_start_rms  – RMS level above which sound is considered speech onset.
+                        Raised from 0.024 → 0.035 so that faint background
+                        noise and quiet cough overtones don't arm the detector.
+    min_speech_ms     – How long sustained energy must last before we call it
+                        speech START.  Raised from 250 → 350 ms: typical coughs
+                        and barks are impulsive (< 200 ms onset), so a slightly
+                        longer gate filters most of them out before they ever
+                        reach the Bhashini WebSocket.
+    min_pause_ms      – Kept at 950 ms so genuine speech segments with natural
+                        short pauses are not chopped up.
+
+    NOTE: Even when these thresholds are crossed by a non-speech sound, the
+    BargeInInterruptionProcessor in bot.py will NOT interrupt the bot unless
+    Bhashini actually returns a transcript — providing a second line of defence.
+    """
+
+    speech_start_rms: float = 0.035   # raised from 0.024
     speech_end_rms: float = 0.012
-    min_speech_ms: int = 250
+    min_speech_ms: int = 350           # raised from 250
     min_pause_ms: int = 950
     chunk_ms: int = 200
 
@@ -96,6 +114,7 @@ class BhashiniSTTService(STTService):
         input_sample_rate: Optional[int] = None,
         audio_channels: int = 1,
         chunk_ms: int = 200,
+        suppress_vad_frames: bool = False,
         telemetry_callback: Optional[Callable[[dict], Awaitable[None]]] = None,
         **kwargs,
     ):
@@ -126,6 +145,7 @@ class BhashiniSTTService(STTService):
         self._pre_roll_bytes = max(0, int(self._input_sample_rate * self._pre_roll_ms / 1000) * self._audio_channels * 2)
         self._target_sample_rate = 16000
 
+        self._suppress_vad_frames = suppress_vad_frames
         self._resampler = create_stream_resampler()
         self._vad = VADProcessor(chunk_ms=self._chunk_ms)
         self._audio_buffer = bytearray()
@@ -147,7 +167,7 @@ class BhashiniSTTService(STTService):
         self._segment_finalized_at: Optional[float] = None
 
         logger.info(
-            "Bhashini STT initialized | ws_url={} service_id={} language={} input_rate={} target_rate={} chunk_ms={} pre_roll_ms={}",
+            "Bhashini STT initialized | ws_url={} service_id={} language={} input_rate={} target_rate={} chunk_ms={} pre_roll_ms={} suppress_vad_frames={}",
             self._ws_url,
             self._service_id,
             self._language,
@@ -155,6 +175,7 @@ class BhashiniSTTService(STTService):
             self._target_sample_rate,
             self._chunk_ms,
             self._pre_roll_ms,
+            self._suppress_vad_frames,
         )
 
     async def _emit_latency_metric(
@@ -536,10 +557,14 @@ class BhashiniSTTService(STTService):
             del self._audio_buffer[: self._chunk_bytes]
             try:
                 vad_state = await self._handle_audio_chunk(chunk, pre_roll_snapshot)
-                if vad_state == "START":
-                    yield UserStartedSpeakingFrame()
-                elif vad_state == "STOP":
-                    yield UserStoppedSpeakingFrame()
+                # When suppress_vad_frames=True the transport's SileroVADAnalyzer
+                # emits UserStarted/StoppedSpeakingFrame — we must not duplicate them.
+                # Bhashini's internal VAD still controls WS open/close timing.
+                if not self._suppress_vad_frames:
+                    if vad_state == "START":
+                        yield UserStartedSpeakingFrame()
+                    elif vad_state == "STOP":
+                        yield UserStoppedSpeakingFrame()
             except Exception as e:
                 if "received 1000 (OK); then sent 1000 (OK)" in str(e):
                     logger.debug("Bhashini websocket closed normally between audio chunks")
