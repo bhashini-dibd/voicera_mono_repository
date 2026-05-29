@@ -326,6 +326,10 @@ async def run_bot(
             org_id=org_id,
             telemetry_callback=latency_callback,
         )
+        if stt_provider_name == "bhashini" and llm_provider_name == "kenpath":
+            enable_fast_turn = getattr(llm, "enable_bhashini_fast_turn", None)
+            if callable(enable_fast_turn):
+                enable_fast_turn()
         tts = create_tts_service(
             tts_config,
             sample_rate,
@@ -540,7 +544,7 @@ async def bot(
         vad_analyzer = SileroVADAnalyzer(
             sample_rate=sample_rate,
             params=VADParams(
-                stop_secs=0.5,     # 500 ms of silence ends the speech segment
+                stop_secs=0.2,     # 500 ms of silence ends the speech segment
                 min_volume=0.6,    # ignore very quiet background hiss
                 confidence=0.7,    # neural confidence threshold (0–1); coughs/barks
                                    # typically score < 0.4, real speech > 0.7

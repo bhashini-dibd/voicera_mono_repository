@@ -25,6 +25,7 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
 )
 from pipecat.services.stt_service import STTService
+from pipecat.services.openai.llm import OpenAIUserContextAggregator
 from pipecat.utils.time import time_now_iso8601
 
 try:
@@ -60,7 +61,7 @@ class VADProcessor:
     speech_start_rms: float = 0.035   # raised from 0.024
     speech_end_rms: float = 0.012
     min_speech_ms: int = 350           # raised from 250
-    min_pause_ms: int = 950
+    min_pause_ms: int = 400
     chunk_ms: int = 200
 
     is_speaking: bool = False
@@ -74,7 +75,7 @@ class VADProcessor:
 
         rms = float(np.sqrt(np.mean(samples**2)))
         meter = int(min(rms / 0.2, 1.0) * 20)
-        logger.debug("Bhashini VAD RMS: [{}] {:.4f}", "#" * meter + " " * (20 - meter), rms)
+        
 
         if not self.is_speaking:
             if rms > self.speech_start_rms:
@@ -98,6 +99,65 @@ class VADProcessor:
                 self.silence_run_ms = 0
 
         return "CONTINUE" if self.is_speaking else "IDLE"
+
+
+class BhashiniKenpathUserContextAggregator(OpenAIUserContextAggregator):
+    """User aggregator for Bhashini STT + Kenpath LLM.
+
+    Pushes the user turn to the LLM as soon as a final Bhashini
+    ``TranscriptionFrame`` is received, without waiting for Silero
+    ``UserStoppedSpeakingFrame`` or Pipecat's ``aggregation_timeout``.
+
+    Uses the same guards as ``BargeInInterruptionProcessor`` in ``bot.py``:
+    Silero must have seen real speech, and the final text must be long enough
+    to avoid cough/noise one-character ASR artefacts triggering Vistaar.
+    """
+
+    # Keep in sync with BargeInInterruptionProcessor.MIN_TEXT_CHARS in bot.py
+    MIN_TEXT_CHARS = 2
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._silero_armed = False
+
+    async def _handle_user_started_speaking(self, frame: UserStartedSpeakingFrame):
+        await super()._handle_user_started_speaking(frame)
+        self._silero_armed = True
+
+    async def _handle_user_stopped_speaking(self, frame: UserStoppedSpeakingFrame):
+        await super()._handle_user_stopped_speaking(frame)
+
+    async def _handle_transcription(self, frame: TranscriptionFrame):
+        text = frame.text.strip()
+        if not text:
+            return
+
+        if len(text) < self.MIN_TEXT_CHARS:
+            logger.debug(
+                "Bhashini final too short for LLM ({} chars) — skipping: '{}'",
+                len(text),
+                text,
+            )
+            await self.reset()
+            self._silero_armed = False
+            return
+
+        if not self._silero_armed:
+            logger.debug(
+                "Bhashini final ignored for LLM — Silero did not detect speech: '{}'",
+                text[:80],
+            )
+            await self.reset()
+            return
+
+        await super()._handle_transcription(frame)
+        if len(self._aggregation) > 0:
+            logger.debug(
+                "Bhashini final transcript — pushing LLM immediately | text='{}'",
+                self._aggregation[:80],
+            )
+            await self.push_aggregation()
+        self._silero_armed = False
 
 
 class BhashiniSTTService(STTService):
